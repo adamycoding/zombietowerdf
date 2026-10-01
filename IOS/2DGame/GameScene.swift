@@ -72,6 +72,7 @@ final class GameScene: SKScene {
 
         setUpDebugStats(in: view) // remove once you trust the loop; handy while building it
         refreshTowerPanel()
+        spawnZombie()
     }
     // MARK: - Tower selection panel (Adam)
 
@@ -200,6 +201,57 @@ final class GameScene: SKScene {
         } ?? "Choose an affordable tower"
         debugLabel?.position = CGPoint(x: left, y: size.height - lastSafeArea.top - 24)
         updatePlacementPreview()
+        setUpPath()
+    
+    }
+    //this will spawn zombies - Adam
+    private func spawnZombie() {
+        guard let startPoint = pathWaypoints.first else { return }
+
+        let zombie = SKShapeNode(circleOfRadius: 12)
+        zombie.name = "zombie"
+        zombie.fillColor = .systemGreen
+        zombie.strokeColor = .black
+        zombie.lineWidth = 2
+        zombie.position = startPoint
+        zombie.zPosition = Layer.zombies.rawValue
+
+        worldNode.addChild(zombie)
+        zombies.append(ZombieState(node: zombie))
+    } //Ends spawnZombie()
+    
+    private func moveZombie(deltaTime: TimeInterval) {
+        // Work backward so removing a zombie doesn't shift
+        // the indexes of zombies we still need to update.
+        for index in zombies.indices.reversed() {
+            let zombie = zombies[index].node
+            var remainingMovement = zombieSpeed * CGFloat(deltaTime)
+
+            while remainingMovement > 0 {
+                let waypointIndex = zombies[index].nextWaypointIndex
+
+                guard waypointIndex < pathWaypoints.count else {
+                    zombie.removeFromParent()
+                    zombies.remove(at: index)
+                    break
+                }
+
+                let target = pathWaypoints[waypointIndex]
+                let dx = target.x - zombie.position.x
+                let dy = target.y - zombie.position.y
+                let distance = (dx * dx + dy * dy).squareRoot()
+
+                if distance <= remainingMovement {
+                    zombie.position = target
+                    remainingMovement -= distance
+                    zombies[index].nextWaypointIndex += 1
+                } else {
+                    zombie.position.x += (dx / distance) * remainingMovement
+                    zombie.position.y += (dy / distance) * remainingMovement
+                    remainingMovement = 0
+                }
+            }
+        }
     }
 
     // These are the connection points for a future money/unlock system.
@@ -314,10 +366,15 @@ final class GameScene: SKScene {
     /// wave timers, etc. will eventually plug in. For Sprint 1 it just
     /// proves the loop runs at a stable, fixed rate.
     private func tick(deltaTime: TimeInterval) {
-        // Example placeholder — remove once real systems are wired in:
-        // worldNode.enumerateChildNodes(withName: "//zombie_*") { node, _ in
-        //     (node as? ZombieNode)?.tick(deltaTime: deltaTime)
-        // }
+        spawnTimer += deltaTime
+
+        while spawnTimer >= spawnInterval {
+            spawnTimer -= spawnInterval
+            spawnZombie()
+        }
+
+        moveZombie(deltaTime: deltaTime)
+
         tickCount += 1
         updateDebugStats()
     }
@@ -364,5 +421,58 @@ final class GameScene: SKScene {
 
     private func updateDebugStats() {
         debugLabel?.text = "fixed ticks: \(tickCount)"
+    }
+    
+    // Ordered points that zombies will follow - Adam
+    private var pathWaypoints: [CGPoint] = []
+    
+    private struct ZombieState {
+        let node: SKShapeNode
+        var nextWaypointIndex: Int = 1
+    }
+
+    private var zombies: [ZombieState] = []
+    private let zombieSpeed: CGFloat = 60
+
+    private var spawnTimer: TimeInterval = 0
+    private let spawnInterval: TimeInterval = 1.5
+    
+    private func setUpPath() {
+        // Keep the route above the tower selection panel.
+        let left = lastSafeArea.left + 40
+        let right = size.width - lastSafeArea.right - 40
+        let bottom = towerPanel.size.height + 60
+        let top = size.height - lastSafeArea.top - 60
+
+        guard right > left, top > bottom else { return }
+
+        let middleX = (left + right) / 2
+        let lowerY = bottom + (top - bottom) * 0.25
+        let upperY = bottom + (top - bottom) * 0.75
+
+        pathWaypoints = [
+            CGPoint(x: left, y: lowerY),       // Start
+            CGPoint(x: middleX, y: lowerY),    // Walk right
+            CGPoint(x: middleX, y: upperY),    // Turn upward
+            CGPoint(x: right, y: upperY)      // Walk right to the end
+        ]
+
+        // Draw the same route that zombies will eventually follow.
+        worldNode.childNode(withName: "zombiePath")?.removeFromParent()
+
+        let drawing = CGMutablePath()
+        drawing.move(to: pathWaypoints[0])
+
+        for waypoint in pathWaypoints.dropFirst() {
+            drawing.addLine(to: waypoint)
+        }
+
+        let pathNode = SKShapeNode(path: drawing)
+        pathNode.name = "zombiePath"
+        pathNode.strokeColor = .brown
+        pathNode.lineWidth = 32
+        pathNode.zPosition = Layer.path.rawValue
+
+        worldNode.addChild(pathNode)
     }
 }
