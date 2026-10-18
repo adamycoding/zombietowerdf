@@ -19,6 +19,7 @@ final class ZombieManager {
         var slowTimer: TimeInterval = 0 // > 0 while slowed by an ice tower
         var maxHealth: Int = ZombieManager.normalHealth // MH2D-52
         var health: Int = ZombieManager.normalHealth
+        var reward: Int = ZombieManager.normalReward    // MH2D-53
     }
 
     /// Drawn radius of a zombie; its hurtbox uses the same number so the
@@ -28,6 +29,9 @@ final class ZombieManager {
     /// each set their own number.
     static let normalHealth = 3
     static let healthBarWidth: CGFloat = 24
+    /// MH2D-53: money paid to the player when a normal zombie is killed.
+    /// Enemy types (MH2D-20) will each set their own number.
+    static let normalReward = 10
 
     static let iceSlowFactor: CGFloat = 0.45   // 45% speed while slowed
     static let iceSlowDuration: TimeInterval = 2.0
@@ -38,6 +42,10 @@ final class ZombieManager {
     var spawnInterval: TimeInterval = 1.5
 
     private(set) var zombies: [Zombie] = []
+
+    /// MH2D-53: called with the reward when a zombie is killed by damage.
+    /// Zombies that reach the end of the path do NOT trigger this.
+    var onZombieKilled: ((Int) -> Void)?
 
     private let world: SKNode
     private let path: GamePath
@@ -174,7 +182,8 @@ final class ZombieManager {
 
     /// MH2D-52: apply a projectile's damage to the zombie it hit. Health drops
     /// by exactly `damage`; the health bar and a short white flash show it.
-    /// Death (removal, reward, effect) is MH2D-53 / MH2D-54.
+    /// A killed zombie is removed and pays its reward (MH2D-53); the death
+    /// effect is MH2D-54.
     func applyDamage(at index: Int, damage: Int) {
         guard zombies.indices.contains(index) else { return }
         zombies[index].health = max(0, zombies[index].health - damage)
@@ -187,10 +196,13 @@ final class ZombieManager {
         }
     }
 
-    /// TEMP until MH2D-53/54: remove the zombie with the old quick pop.
+    /// MH2D-53: remove the zombie and pay its reward. The visual is the old
+    /// quick pop until MH2D-54 adds a proper death effect.
     private func die(at index: Int) {
         let node = zombies[index].node
+        let reward = zombies[index].reward
         zombies.remove(at: index)
+        onZombieKilled?(reward)
         node.removeAllActions()
         node.fillColor = .systemRed
         node.run(.sequence([

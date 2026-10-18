@@ -27,9 +27,13 @@ final class GameScene: SKScene {
     private lazy var towerManager = TowerManager(world: worldNode, path: path,
                                                  zombies: zombieManager, projectiles: projectileSystem)
 
+    /// The player's money (Economy/PlayerWallet.swift). `towerSelection` only
+    /// mirrors the total so the panel can show/grey out towers.
+    private let wallet = PlayerWallet()
+
     // Sample settings: adjust prices in TowerSelection.swift.
     private(set) var towerSelection = TowerSelectionState(
-        money: 1000, // TEMP test value so you can place many towers; set back to ~150 later
+        money: PlayerWallet.startingMoney, // the wallet owns the real total; this mirrors it for the panel
         unlockedTowers: TowerType.allCases
     )
 
@@ -65,6 +69,17 @@ final class GameScene: SKScene {
         }
         addChild(worldNode)
         setUpTowerPanel()
+
+        // Any wallet change updates the tower menu and redraws the panel.
+        wallet.onChange = { [weak self] money in
+            guard let self else { return }
+            self.towerSelection.updateMoney(money)
+            self.refreshTowerPanel()
+        }
+        // MH2D-53: kills pay the player.
+        zombieManager.onZombieKilled = { [weak self] reward in
+            self?.wallet.add(reward)
+        }
 
         setUpDebugStats(in: view) // remove once you trust the loop; handy while building it
         setUpHitboxDebugControls() // MH2D-12 test toggles (hitbox overlay, stress test)
@@ -217,8 +232,7 @@ final class GameScene: SKScene {
 
     // These are the connection points for a future money/unlock system.
     func updatePlayerMoney(_ amount: Int) {
-        towerSelection.updateMoney(amount)
-        refreshTowerPanel()
+        wallet.set(amount)
     }
 
     func updateUnlockedTowers(_ towers: [TowerType]) {
@@ -241,7 +255,9 @@ final class GameScene: SKScene {
         placementPreview.addChild(outline)
         previewOutline = outline
         placementPreview.addChild(tower.makeIcon(enabled: true))
-        placementPreview.position = CGPoint(x: size.width / 2, y: (towerPanel.size.height + size.height) / 2)
+        if !isDraggingTower { // a kill can refresh the panel mid-drag; don't move the preview then
+            placementPreview.position = CGPoint(x: size.width / 2, y: (towerPanel.size.height + size.height) / 2)
+        }
         updatePreviewValidity()
     }
 
@@ -356,7 +372,7 @@ final class GameScene: SKScene {
               towerManager.place(type, at: point) else { return } // rejected: nothing placed, no money spent
 
         // Pay, leave placement mode, and refresh the panel (money, card states).
-        towerSelection.updateMoney(towerSelection.money - type.cost)
+        wallet.spend(type.cost)
         towerSelection.cancel()
         refreshTowerPanel()
     }
@@ -364,8 +380,7 @@ final class GameScene: SKScene {
     /// Remove the selected tower, refund part of its cost, free its spot.
     private func sellSelectedTower() {
         guard let type = towerManager.sellSelected() else { return }
-        towerSelection.updateMoney(towerSelection.money + TowerManager.sellValue(of: type))
-        refreshTowerPanel()
+        wallet.add(TowerManager.sellValue(of: type))
     }
 
     // MARK: - MH2D-36: Fixed-timestep update loop
