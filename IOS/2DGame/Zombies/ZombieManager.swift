@@ -196,17 +196,55 @@ final class ZombieManager {
         }
     }
 
-    /// MH2D-53: remove the zombie and pay its reward. The visual is the old
-    /// quick pop until MH2D-54 adds a proper death effect.
+    /// MH2D-53: remove the zombie and pay its reward.
+    /// MH2D-54: play the death effect (red pop, burst of bits, floating "+$").
     private func die(at index: Int) {
         let node = zombies[index].node
         let reward = zombies[index].reward
         zombies.remove(at: index)
         onZombieKilled?(reward)
+        playDeathEffect(on: node, reward: reward)
+    }
+
+    /// MH2D-54: everything here is cosmetic and cleans itself up.
+    private func playDeathEffect(on node: SKShapeNode, reward: Int) {
         node.removeAllActions()
+        node.childNode(withName: "healthBack")?.isHidden = true
         node.fillColor = .systemRed
         node.run(.sequence([
-            .group([.fadeOut(withDuration: 0.12), .scale(to: 1.4, duration: 0.12)]),
+            .group([.fadeOut(withDuration: 0.2), .scale(to: 1.5, duration: 0.2)]),
+            .removeFromParent()
+        ]))
+
+        guard let parent = node.parent else { return }
+        let origin = node.position
+
+        // Burst of small red bits flying outward.
+        let bitCount = 6
+        for i in 0..<bitCount {
+            let bit = SKShapeNode(circleOfRadius: 2.5)
+            bit.fillColor = .systemRed
+            bit.strokeColor = .clear
+            bit.position = origin
+            bit.zPosition = Layer.effects.rawValue
+            parent.addChild(bit)
+            let angle = CGFloat(i) / CGFloat(bitCount) * 2 * .pi + CGFloat.random(in: -0.3...0.3)
+            let distance = CGFloat.random(in: 16...26)
+            let move = SKAction.moveBy(x: cos(angle) * distance, y: sin(angle) * distance, duration: 0.3)
+            move.timingMode = .easeOut
+            bit.run(.sequence([.group([move, .fadeOut(withDuration: 0.3)]), .removeFromParent()]))
+        }
+
+        // Floating "+$10" so the reward is visible.
+        let label = SKLabelNode(fontNamed: "AvenirNext-Bold")
+        label.text = "+$\(reward)"
+        label.fontSize = 12
+        label.fontColor = .systemYellow
+        label.position = CGPoint(x: origin.x, y: origin.y + 14)
+        label.zPosition = Layer.effects.rawValue
+        parent.addChild(label)
+        label.run(.sequence([
+            .group([.moveBy(x: 0, y: 18, duration: 0.6), .fadeOut(withDuration: 0.6)]),
             .removeFromParent()
         ]))
     }
