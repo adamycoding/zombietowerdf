@@ -46,10 +46,45 @@ final class ZombieManager {
     /// MH2D-53: called with the reward when a zombie is killed by damage.
     /// Zombies that reach the end of the path do NOT trigger this.
     var onZombieKilled: ((Int) -> Void)?
-
+    var onWaveCompleted: ((Int) -> Void)?
+    
+    
     private let world: SKNode
     private let path: GamePath
     private var spawnTimer: TimeInterval = 0
+    private let waves: [WaveDefinition] = [
+        WaveDefinition(
+            zombieTypes: Array(repeating: .normal, count: 5),
+            spawnInterval: 1.5
+        ),
+        WaveDefinition(
+            zombieTypes: Array(repeating: .normal, count: 8),
+            spawnInterval: 1.2
+        ),
+        WaveDefinition(
+            zombieTypes: Array(repeating: .normal, count: 10),
+            spawnInterval: 1.0
+        ),
+        WaveDefinition(
+            zombieTypes: Array(repeating: .normal, count: 12),
+            spawnInterval: 0.9
+        ),
+        WaveDefinition(
+            zombieTypes: Array(repeating: .normal, count: 15),
+            spawnInterval: 0.8
+        )
+    ]
+
+    private var waveDefinition: WaveDefinition {
+        waves[currentWave - 1]
+    }
+
+    private var zombiesPerWave: Int {
+        waveDefinition.zombieCount
+    }
+    
+    //tracks how many have spawned so far.
+    private var zombiesSpawnedThisWave: Int = 0
 
     init(world: SKNode, path: GamePath) {
         self.world = world
@@ -64,19 +99,28 @@ final class ZombieManager {
     }
 
     func updateSpawning(deltaTime: TimeInterval) {
+        guard zombiesSpawnedThisWave < zombiesPerWave else {
+            return
+        }
+
         spawnTimer += deltaTime
-        while spawnTimer >= spawnInterval {
-            spawnTimer -= spawnInterval
-            spawn()
+
+        while spawnTimer >= waveDefinition.spawnInterval &&              zombiesSpawnedThisWave < zombiesPerWave {
+            spawnTimer -= waveDefinition.spawnInterval
+            let type = waveDefinition.zombieTypes[zombiesSpawnedThisWave]
+            spawn(type: type)
+            zombiesSpawnedThisWave += 1
         }
     }
-
-    private func spawn() {
-        guard let startPoint = path.waypoints.first else { return }
+    
+    private func spawn(type: ZombieType) {        guard let startPoint = path.waypoints.first else { return }
 
         let zombie = SKShapeNode(circleOfRadius: ZombieManager.radius)
         zombie.name = "zombie"
-        zombie.fillColor = .systemGreen
+        switch type {
+        case .normal:
+            zombie.fillColor = .systemGreen
+        }
         zombie.strokeColor = .black
         zombie.lineWidth = 2
         zombie.position = startPoint
@@ -229,4 +273,42 @@ final class ZombieManager {
             .run { node.strokeColor = .black }
         ]), withKey: "hitFlash")
     }
+    
+    // Checks if wave has fully spawned and if there is no zombies left.
+    var isWaveComplete: Bool {
+        zombiesSpawnedThisWave >= zombiesPerWave &&
+        zombies.isEmpty
+    }
+    
+    private(set) var currentWave: Int = 1
+    
+    var totalWaves: Int {
+        waves.count
+    }
+    
+    private var hasAnnouncedWaveCompletion: Bool = false
+    
+    func checkWaveCompletion() {
+        guard isWaveComplete && !hasAnnouncedWaveCompletion else {
+            return
+        }
+
+        hasAnnouncedWaveCompletion = true
+        print("Wave \(currentWave) Complete")
+        onWaveCompleted?(currentWave)
+
+        guard currentWave < waves.count else {
+            print("All waves complete!")
+            return
+        }
+
+        currentWave += 1
+        zombiesSpawnedThisWave = 0
+        spawnTimer = 0
+        hasAnnouncedWaveCompletion = false
+
+        print("Starting Wave \(currentWave)")
+    }
+    
+    
 }
