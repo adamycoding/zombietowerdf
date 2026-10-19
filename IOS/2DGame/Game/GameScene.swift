@@ -43,6 +43,9 @@ final class GameScene: SKScene {
     private var cancelButton: SKSpriteNode?
     private var sellButton: SKSpriteNode?
     private let selectionLabel = SKLabelNode(fontNamed: "AvenirNext-Medium")
+    private let waveLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
+    private let baseHealthLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
+    private let placeholderBaseHealth: Int = 5
     private let placementPreview = SKNode()
     private var lastSafeArea: UIEdgeInsets = .zero
     private var previewOutline: SKShapeNode?
@@ -68,6 +71,26 @@ final class GameScene: SKScene {
             return
         }
         addChild(worldNode)
+        waveLabel.fontSize = 20
+        waveLabel.fontColor = .white
+        waveLabel.horizontalAlignmentMode = .right
+        waveLabel.verticalAlignmentMode = .top
+        waveLabel.zPosition = Layer.hud.rawValue
+        waveLabel.text = "Wave \(zombieManager.currentWave)"
+        addChild(waveLabel)
+        
+        baseHealthLabel.fontSize = 20
+        baseHealthLabel.fontColor = .systemRed
+        baseHealthLabel.horizontalAlignmentMode = .right
+        baseHealthLabel.verticalAlignmentMode = .top
+        baseHealthLabel.zPosition = Layer.hud.rawValue
+        baseHealthLabel.text = String(
+            repeating: "♥",
+            count: placeholderBaseHealth
+        )
+        addChild(baseHealthLabel)
+        
+        
         setUpTowerPanel()
 
         // Any wallet change updates the tower menu and redraws the panel.
@@ -80,12 +103,18 @@ final class GameScene: SKScene {
         zombieManager.onZombieKilled = { [weak self] reward in
             self?.wallet.add(reward)
         }
+        
+        zombieManager.onWaveCompleted = { [weak self] _ in
+            self?.wallet.add(50)
+        }
 
         setUpDebugStats(in: view) // remove once you trust the loop; handy while building it
         setUpHitboxDebugControls() // MH2D-12 test toggles (hitbox overlay, stress test)
         refreshTowerPanel()
         // First zombie now comes from tick()'s spawn timer, which waits for a valid path.
     }
+    
+    
 
     // MARK: - Tower selection panel (Adam)
 
@@ -125,6 +154,16 @@ final class GameScene: SKScene {
         cancelButton = nil
         sellButton = nil
         lastSafeArea = view?.safeAreaInsets ?? .zero
+        
+        waveLabel.position = CGPoint(
+            x: size.width - lastSafeArea.right - 16,
+            y: size.height - lastSafeArea.top - 16
+        )
+        
+        baseHealthLabel.position = CGPoint(
+            x: size.width - lastSafeArea.right - 16,
+            y: waveLabel.position.y - 30
+        )
 
         let left = lastSafeArea.left + 16
         let right = lastSafeArea.right + 16
@@ -445,6 +484,8 @@ final class GameScene: SKScene {
 
         tickCount += 1
         updateDebugStats()
+        zombieManager.checkWaveCompletion()
+        waveLabel.text = "Wave \(zombieManager.currentWave)/\(zombieManager.totalWaves)"
     }
 
     override func didChangeSize(_ oldSize: CGSize) {
