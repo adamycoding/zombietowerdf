@@ -45,7 +45,16 @@ final class GameScene: SKScene {
     private let selectionLabel = SKLabelNode(fontNamed: "AvenirNext-Medium")
     private let waveLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
     private let baseHealthLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
-    private let placeholderBaseHealth: Int = 5
+    private let baseHealth = BaseHealth() // MH2D-56 / MH2D-126
+    private var isGameOver = false          // MH2D-57
+    private var gameOverOverlay: GameOverOverlay?   // MH2D-81
+    private var gameOverShownAt: TimeInterval?      // MH2D-82: ignore taps for a moment
+    private static let gameOverTapDelay: TimeInterval = 0.6
+    /// MH2D-82: set by GameViewController. Retry builds a fresh scene; the
+    /// Main Menu button only shows once `onMainMenuRequested` is set (MH2D-22).
+    var onRetryRequested: (() -> Void)?
+    var onMainMenuRequested: (() -> Void)?
+    private let runStats = RunStats()       // MH2D-81
     private let placementPreview = SKNode()
     private var lastSafeArea: UIEdgeInsets = .zero
     private var previewOutline: SKShapeNode?
@@ -84,10 +93,7 @@ final class GameScene: SKScene {
         baseHealthLabel.horizontalAlignmentMode = .right
         baseHealthLabel.verticalAlignmentMode = .top
         baseHealthLabel.zPosition = Layer.hud.rawValue
-        baseHealthLabel.text = String(
-            repeating: "♥",
-            count: placeholderBaseHealth
-        )
+        baseHealthLabel.text = "♥ \(baseHealth.current)"
         addChild(baseHealthLabel)
         
         
@@ -104,12 +110,24 @@ final class GameScene: SKScene {
             self?.wallet.add(reward)
         }
         
+        // MH2D-56: a zombie that reaches the end costs the base 1 health.
+        zombieManager.onZombieReachedBase = { [weak self] in
+            self?.baseHealth.damage(1)
+        }
+        baseHealth.onChange = { [weak self] health in
+            self?.baseHealthLabel.text = "♥ \(health)"
+        }
+        // MH2D-57: base health reaching 0 ends the game.
+        baseHealth.onDepleted = { [weak self] in
+            self?.triggerGameOver()
+        }
+
         zombieManager.onWaveCompleted = { [weak self] _ in
+            self?.runStats.recordWaveSurvived()
             self?.wallet.add(50)
         }
 
         setUpDebugStats(in: view) // remove once you trust the loop; handy while building it
-        setUpHitboxDebugControls() // MH2D-12 test toggles (hitbox overlay, stress test)
         refreshTowerPanel()
         // First zombie now comes from tick()'s spawn timer, which waits for a valid path.
     }
@@ -248,7 +266,6 @@ final class GameScene: SKScene {
             selectionLabel.text = "Drag a tower from the panel onto the map"
         }
         debugLabel?.position = CGPoint(x: left, y: size.height - lastSafeArea.top - 24)
-        layoutDebugControls()
         updatePlacementPreview()
         setUpPath()
     }
@@ -308,6 +325,18 @@ final class GameScene: SKScene {
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = touches.first else { return }
+        // MH2D-57/82: after losing, the only touches that matter are the Game Over buttons.
+        if isGameOver {
+            // Don't let a tap that was already on its way when the game ended hit Retry.
+            guard let shownAt = gameOverShownAt,
+                  touch.timestamp - shownAt >= GameScene.gameOverTapDelay else { return }
+            switch gameOverOverlay?.action(at: touch.location(in: self)) {
+            case .retry: onRetryRequested?()
+            case .mainMenu: onMainMenuRequested?()
+            case nil: break
+            }
+            return
+        }
         let point = touch.location(in: self)
         let panelPoint = touch.location(in: towerPanel)
         isDraggingTower = false
@@ -331,16 +360,6 @@ final class GameScene: SKScene {
             return
         }
 
-        // MH2D-12 debug toggles (top-left of the map).
-        if hitboxToggleLabel?.frame.insetBy(dx: -10, dy: -8).contains(point) == true {
-            toggleHitboxes()
-            return
-        }
-        if stressToggleLabel?.frame.insetBy(dx: -10, dy: -8).contains(point) == true {
-            toggleStress()
-            return
-        }
-
         // Map touch: tapping a placed tower selects it, empty map deselects.
         if towerManager.select(at: point) {
             refreshTowerPanel()
@@ -355,6 +374,7 @@ final class GameScene: SKScene {
     /// Release: place the tower if the finger is over the map and the spot
     /// is valid; otherwise cancel the drag.
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard !isGameOver else { return }
         guard let touch = touches.first else { return }
 
         if isDraggingTower {
@@ -468,6 +488,7 @@ final class GameScene: SKScene {
     /// One gameplay step. Order matters: spawn → move → towers fire →
     /// projectiles move and hit.
     private func tick(deltaTime: TimeInterval) {
+        guard !isGameOver else { return } // MH2D-57: freeze everything on Game Over
         // If the route isn't built yet (first layout pass had a degenerate
         // size), don't spawn and don't bank time — otherwise a burst of
         // zombies appears all at once when the path finally exists.
@@ -479,6 +500,7 @@ final class GameScene: SKScene {
         }
 
         zombieManager.move(deltaTime: deltaTime)
+        guard !isGameOver else { return } // base just fell: don't count this wave as survived
         towerManager.updateFire(deltaTime: deltaTime)   // MH2D-12 TEMP test shooters
         projectileSystem.update(deltaTime: deltaTime, bounds: size) // MH2D-46 collision checks
 
@@ -488,58 +510,32 @@ final class GameScene: SKScene {
         waveLabel.text = "Wave \(zombieManager.currentWave)/\(zombieManager.totalWaves)"
     }
 
+    // MARK: - Game Over (MH2D-57)
+
+    /// Stop the game and show the Game Over screen (MH2D-81).
+    private func triggerGameOver() {
+        guard !isGameOver else { return }
+        isGameOver = true
+        // Drop any tower the player is dragging so releasing it can't build or charge.
+        if isDraggingTower {
+            isDraggingTower = false
+            towerSelection.cancel()
+            refreshTowerPanel()
+        }
+        placementPreview.isHidden = true
+
+        let overlay = GameOverOverlay(size: size,
+                                      wavesSurvived: runStats.wavesSurvived,
+                                      totalWaves: zombieManager.totalWaves,
+                                      showsMainMenu: onMainMenuRequested != nil)
+        gameOverOverlay = overlay
+        gameOverShownAt = ProcessInfo.processInfo.systemUptime
+        addChild(overlay)
+    }
+
     override func didChangeSize(_ oldSize: CGSize) {
         super.didChangeSize(oldSize)
         refreshTowerPanel()
-    }
-
-    // MARK: - Debug overlay (hitboxes) and stress test (MH2D-12)
-
-    private var stressMode = false
-    private var hitboxToggleLabel: SKLabelNode?
-    private var stressToggleLabel: SKLabelNode?
-
-    private func setUpHitboxDebugControls() {
-        func makeToggle() -> SKLabelNode {
-            let label = SKLabelNode(fontNamed: "Menlo")
-            label.fontSize = 12
-            label.fontColor = .yellow
-            label.horizontalAlignmentMode = .left
-            label.zPosition = Layer.hud.rawValue
-            addChild(label)
-            return label
-        }
-        hitboxToggleLabel = makeToggle()
-        stressToggleLabel = makeToggle()
-        updateDebugToggleLabels()
-    }
-
-    private func layoutDebugControls() {
-        let left = lastSafeArea.left + 16
-        hitboxToggleLabel?.position = CGPoint(x: left, y: size.height - lastSafeArea.top - 46)
-        stressToggleLabel?.position = CGPoint(x: left, y: size.height - lastSafeArea.top - 66)
-    }
-
-    private func updateDebugToggleLabels() {
-        hitboxToggleLabel?.text = "hitboxes: \(DebugOverlay.showHitboxes ? "ON " : "OFF") (tap)"
-        stressToggleLabel?.text = "stress test: \(stressMode ? "ON " : "OFF") (tap)"
-    }
-
-    private func toggleHitboxes() {
-        DebugOverlay.showHitboxes.toggle()
-        for name in DebugOverlay.circleNames {
-            worldNode.enumerateChildNodes(withName: "//" + name) { node, _ in
-                node.isHidden = !DebugOverlay.showHitboxes
-            }
-        }
-        updateDebugToggleLabels()
-    }
-
-    /// Stress test: zombies spawn every 0.4 s so 20+ are on screen at once.
-    private func toggleStress() {
-        stressMode.toggle()
-        zombieManager.spawnInterval = stressMode ? 0.4 : zombieManager.normalSpawnInterval
-        updateDebugToggleLabels()
     }
 
     // MARK: - MH2D-37: App lifecycle (pause/resume/background)
@@ -580,6 +576,6 @@ final class GameScene: SKScene {
     }
 
     private func updateDebugStats() {
-        debugLabel?.text = "ticks \(tickCount) | zombies \(zombieManager.zombies.count) | shots \(projectileSystem.activeCount) | hits \(projectileSystem.hitCount) | misses \(projectileSystem.missCount)"
+        debugLabel?.text = "ticks \(tickCount) | zombies \(zombieManager.zombies.count) | shots \(projectileSystem.activeCount) | hits \(projectileSystem.hitCount) | misses \(projectileSystem.missCount) | breached \(zombieManager.breachCount)"
     }
 }

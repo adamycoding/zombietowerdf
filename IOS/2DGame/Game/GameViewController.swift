@@ -29,14 +29,10 @@ class GameViewController: UIViewController {
 
         guard let skView = self.view as? SKView else { return }
 
-        let scene = GameScene(size: skView.bounds.size)
-        scene.scaleMode = .resizeFill
-        gameScene = scene
-
-        skView.presentScene(scene)
         skView.ignoresSiblingOrder = true
         skView.showsFPS = true
         skView.showsNodeCount = true
+        startNewGame(in: skView)
 
         // MH2D-37: wire lifecycle notifications to the scene's pause/resume.
         NotificationCenter.default.addObserver(
@@ -51,6 +47,19 @@ class GameViewController: UIViewController {
             name: UIApplication.willEnterForegroundNotification,
             object: nil
         )
+    }
+
+    /// MH2D-82: builds a brand-new scene (money, waves, base health, towers
+    /// all start fresh). Called at launch and when the player taps Retry.
+    private func startNewGame(in skView: SKView) {
+        let scene = GameScene(size: skView.bounds.size)
+        scene.scaleMode = .resizeFill
+        scene.onRetryRequested = { [weak self, weak skView] in
+            guard let skView else { return }
+            self?.startNewGame(in: skView)
+        }
+        gameScene = scene
+        skView.presentScene(scene)
     }
 
     @objc private func appDidEnterBackground() {

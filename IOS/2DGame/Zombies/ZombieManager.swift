@@ -37,15 +37,17 @@ final class ZombieManager {
     static let iceSlowDuration: TimeInterval = 2.0
 
     let speed: CGFloat = 60
-    let normalSpawnInterval: TimeInterval = 1.5
-    /// Stress test shortens this.
-    var spawnInterval: TimeInterval = 1.5
 
     private(set) var zombies: [Zombie] = []
 
     /// MH2D-53: called with the reward when a zombie is killed by damage.
     /// Zombies that reach the end of the path do NOT trigger this.
     var onZombieKilled: ((Int) -> Void)?
+    /// MH2D-55: called once for each zombie that walks off the end of the
+    /// path. MH2D-56 uses this to take away base health.
+    var onZombieReachedBase: (() -> Void)?
+    /// MH2D-55: how many zombies have reached the base (debug / testing).
+    private(set) var breachCount = 0
     var onWaveCompleted: ((Int) -> Void)?
     
     
@@ -169,8 +171,12 @@ final class ZombieManager {
                 let waypointIndex = zombies[index].nextWaypointIndex
 
                 guard waypointIndex < waypoints.count else {
+                    // MH2D-55: reached the end of the path. Remove it first,
+                    // then tell listeners (no reward is paid).
                     zombie.removeFromParent()
                     zombies.remove(at: index)
+                    breachCount += 1
+                    onZombieReachedBase?()
                     break
                 }
 
@@ -253,6 +259,7 @@ final class ZombieManager {
     /// MH2D-54: everything here is cosmetic and cleans itself up.
     private func playDeathEffect(on node: SKShapeNode, reward: Int) {
         node.removeAllActions()
+        node.strokeColor = .black // a hit flash cut short would leave the outline white
         node.childNode(withName: "healthBack")?.isHidden = true
         node.fillColor = .systemRed
         node.run(.sequence([
