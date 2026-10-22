@@ -72,7 +72,7 @@ final class GameScene: SKScene {
 
         // Scaffolding: background, scaling, coordinate origin.
         scaleMode = .resizeFill
-        backgroundColor = SKColor(red: 0.13, green: 0.16, blue: 0.13, alpha: 1)
+        backgroundColor = SKColor(red: 0.39, green: 0.49, blue: 0.25, alpha: 1)
         anchorPoint = CGPoint(x: 0, y: 0) // origin at bottom-left; simplest for tile/grid math
 
         guard worldNode.parent == nil else {
