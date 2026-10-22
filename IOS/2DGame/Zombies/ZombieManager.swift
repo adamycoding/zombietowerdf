@@ -115,9 +115,110 @@ final class ZombieManager {
         }
     }
     
+    private func makeZombieNode() -> SKShapeNode {
+        // The main shape is now the head.
+        // Existing damage and ice effects still change its color.
+        let headPath = CGPath(
+            ellipseIn: CGRect(x: -7, y: 1, width: 14, height: 14),
+            transform: nil
+        )
+        let zombie = SKShapeNode(path: headPath)
+
+        // Add a body part to the zombie.
+        func addPart(
+            width: CGFloat,
+            height: CGFloat,
+            x: CGFloat,
+            y: CGFloat,
+            color: SKColor
+        ) -> SKShapeNode {
+            let part = SKShapeNode(
+                rectOf: CGSize(width: width, height: height),
+                cornerRadius: 2
+            )
+            part.position = CGPoint(x: x, y: y)
+            part.fillColor = color
+            part.strokeColor = SKColor(white: 0.15, alpha: 1)
+            part.lineWidth = 1
+            part.zPosition = 1
+            zombie.addChild(part)
+            return part
+        }
+
+        // Shadow beneath the feet.
+        let shadow = SKShapeNode(
+            ellipseOf: CGSize(width: 20, height: 6)
+        )
+        shadow.position = CGPoint(x: 0, y: -12)
+        shadow.fillColor = SKColor.black.withAlphaComponent(0.2)
+        shadow.strokeColor = .clear
+        shadow.zPosition = -1
+        zombie.addChild(shadow)
+
+        // Two walking legs.
+        for side: CGFloat in [-1, 1] {
+            let leg = addPart(
+                width: 5, height: 9,
+                x: side * 4, y: -8,
+                color: .darkGray
+            )
+
+            let step = SKAction.sequence([
+                .moveBy(x: 0, y: side * 2, duration: 0.22),
+                .moveBy(x: 0, y: -side * 2, duration: 0.22)
+            ])
+            leg.run(.repeatForever(step))
+        }
+
+        // Brown shirt.
+        _ = addPart(
+            width: 12, height: 10,
+            x: 0, y: -1,
+            color: SKColor(
+                red: 0.39, green: 0.36, blue: 0.27, alpha: 1
+            )
+        )
+
+        // Outstretched arms.
+        for side: CGFloat in [-1, 1] {
+            let arm = addPart(
+                width: 4, height: 9,
+                x: side * 8, y: 0,
+                color: SKColor(
+                    red: 0.57, green: 0.70, blue: 0.37, alpha: 1
+                )
+            )
+            arm.zRotation = side * 0.4
+        }
+
+        // Eyes and pupils.
+        for x: CGFloat in [-3, 3] {
+            _ = addPart(
+                width: 4, height: 4,
+                x: x, y: 10,
+                color: .white
+            )
+            let pupil = addPart(
+                width: 1.5, height: 2,
+                x: x, y: 10,
+                color: .black
+            )
+            pupil.zPosition = 2
+        }
+
+        // Mouth.
+        _ = addPart(
+            width: 5, height: 2,
+            x: 0, y: 5,
+            color: .darkGray
+        )
+
+        return zombie
+    }
+
     private func spawn(type: ZombieType) {        guard let startPoint = path.waypoints.first else { return }
 
-        let zombie = SKShapeNode(circleOfRadius: ZombieManager.radius)
+        let zombie = makeZombieNode()
         zombie.name = "zombie"
         switch type {
         case .normal:
