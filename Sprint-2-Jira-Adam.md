@@ -1,4 +1,4 @@
-# Sprint 3 GitHub and Jira Report — Adam
+# Sprint 2 GitHub and Jira Report — Adam
 
 - **Project:** 2D Zombie Tower Defense iOS Game
 - **Repository:** https://github.com/adamycoding/zombietowerdf
