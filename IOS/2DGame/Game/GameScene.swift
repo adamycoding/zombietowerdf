@@ -42,6 +42,22 @@ final class GameScene: SKScene {
     private var towerCards: [(TowerType, SKShapeNode)] = []
     private var cancelButton: SKSpriteNode?
     private var sellButton: SKSpriteNode?
+    /// Money changed since the panel was last drawn (redrawn at most every `panelRefreshInterval`).
+    private var panelDirty = false
+    /// Labels that count down "Need $X" so they can be updated in place without a rebuild.
+    private var needLabels: [(tower: TowerType, label: SKLabelNode)] = []
+    private var upgradeNeedLabel: (cost: Int, label: SKLabelNode)?
+    /// Which cards / the Upgrade button were affordable when the panel was last drawn.
+    private var drawnAffordability: [Bool] = []
+    private func currentAffordability() -> [Bool] {
+        var result = towerSelection.unlockedTowers.map { towerSelection.canSelect($0) }
+        result.append(towerManager.upgradeCost.map { wallet.canAfford($0) } ?? false)
+        return result
+    }
+
+    private var lastPanelRefreshTime: TimeInterval = 0
+    private let panelRefreshInterval: TimeInterval = 0.25
+    private var upgradeButton: SKSpriteNode?   // MH2D-17: only while a placed tower is selected
     private let selectionLabel = SKLabelNode(fontNamed: "AvenirNext-Medium")
     private let waveLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
     private let baseHealthLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
@@ -63,12 +79,27 @@ final class GameScene: SKScene {
     private var isDraggingTower = false
     /// True when the current touch began on the Sell button.
     private var touchStartedOnSell = false
+    private var touchStartedOnUpgrade = false
+
+    // Scrolling tower panel: drag up/down to scroll, pull a card left to place it.
+    private var panelContent: SKNode?
+    private var panelThumb: SKShapeNode?
+    private var panelScroll: CGFloat = 0
+    private var panelMaxScroll: CGFloat = 0
+    private var panelViewportTop: CGFloat = 0
+    private var panelViewportHeight: CGFloat = 0
+    private var panelThumbHeight: CGFloat = 0
+    private var pendingCard: TowerType?
+    private var panelTouchStart: CGPoint?
+    private var panelScrollStart: CGFloat = 0
+    private var isScrollingPanel = false
     /// Offset of the placement preview from the finger/cursor. Zero = the
     /// tower is centered exactly on the touch point (raise y to float it
     /// above a finger on a real phone).
     private let dragOffset = CGPoint(x: 0, y: 0)
 
     override func didMove(to view: SKView) {
+        DamageEffects.reset()
         super.didMove(to: view)
 
         // Scaffolding: background, scaling, coordinate origin.
@@ -114,7 +145,20 @@ final class GameScene: SKScene {
             guard let self else { return }
             self.towerSelection.updateMoney(money)
             self.moneyLabel.text = "$\(money)" // MH2D-70: HUD follows the wallet
-            self.refreshTowerPanel()
+            // Rebuilding the whole panel (every tower icon) is expensive, and
+            // kills pay out many times a second. So only the "Need $X" numbers
+            // change in place; the panel is redrawn (at most a few times per
+            // second, in update()) only when a card or the Upgrade button flips
+            // between affordable and not.
+            for entry in self.needLabels {
+                entry.label.text = "Need $\(max(0, entry.tower.cost - money))"
+            }
+            if let entry = self.upgradeNeedLabel {
+                entry.label.text = "Need $\(max(0, entry.cost - money))"
+            }
+            if self.currentAffordability() != self.drawnAffordability {
+                self.panelDirty = true
+            }
         }
         // MH2D-53: kills pay the player.
         zombieManager.onZombieKilled = { [weak self] reward in
@@ -138,7 +182,7 @@ final class GameScene: SKScene {
             self?.wallet.add(50)
         }
 
-        setUpDebugStats(in: view) // remove once you trust the loop; handy while building it
+        // The green debug stats bar is off. Call setUpDebugStats(in: view) here to bring it back.
         refreshTowerPanel()
         // First zombie now comes from tick()'s spawn timer, which waits for a valid path.
     }
@@ -178,47 +222,55 @@ final class GameScene: SKScene {
     // Rebuild only when money, unlocks, selection, or screen dimensions change.
     private func refreshTowerPanel() {
         guard towerPanel.parent != nil else { return }
+        panelDirty = false
         towerPanel.removeAllChildren()
         towerCards.removeAll()
+        needLabels.removeAll()
+        upgradeNeedLabel = nil
         cancelButton = nil
         sellButton = nil
+        upgradeButton = nil
         lastSafeArea = view?.safeAreaInsets ?? .zero
         
-        // HUD: wave and money top-left (under the debug line), base health top-right.
-        let hudLeft = lastSafeArea.left + 16
+        // HUD: wave and money in the top-left corner, base health in the top-right corner of the map.
+        let hudLeft = lastSafeArea.left + 12
         let hudTop = size.height - lastSafeArea.top
 
-        waveLabel.position = CGPoint(x: hudLeft, y: hudTop - 40)
-        moneyLabel.position = CGPoint(x: hudLeft, y: hudTop - 70)
-
-        baseHealthLabel.position = CGPoint(
-            x: size.width - lastSafeArea.right - 16,
-            y: hudTop - 16
-        )
+        waveLabel.position = CGPoint(x: hudLeft, y: hudTop - 12)
+        moneyLabel.position = CGPoint(x: hudLeft, y: hudTop - 40)
 
         let left = lastSafeArea.left + 16
-        let right = lastSafeArea.right + 16
-        let usableWidth = max(1, size.width - left - right)
-        let gap: CGFloat = 8
-        let cardHeight: CGFloat = 78
-        let columns = max(1, min(4, Int((usableWidth + gap) / 128)))
-        let towers = towerSelection.unlockedTowers
-        let rows = max(1, (towers.count + columns - 1) / columns)
-        let panelHeight = lastSafeArea.bottom + 16 + CGFloat(rows) * (cardHeight + gap) + 42
-        towerPanel.size = CGSize(width: size.width, height: panelHeight)
-        let cardWidth = (usableWidth - CGFloat(columns - 1) * gap) / CGFloat(columns)
 
-        // Tell the tower system where towers may be placed.
+        // The tower panel is a column down the right edge of the screen.
+        // Everything below is in the panel's own coordinates (0,0 = its
+        // bottom-left corner); the map gets whatever space is left over.
+        let towers = towerSelection.unlockedTowers
+        let columns = 1
+        let panelInnerWidth: CGFloat = 112   // narrow, so the map gets the room
+        let panelWidth = panelInnerWidth + lastSafeArea.right
+        let panelLeftEdge = size.width - panelWidth
+        let gap: CGFloat = 8
+        let headerHeight: CGFloat = 48
+        let cardHeight: CGFloat = 64
+        let sellWidth = panelInnerWidth - 16
+        let cardWidth = sellWidth
+        let panelTop = size.height - lastSafeArea.top
+        towerPanel.position = CGPoint(x: panelLeftEdge, y: 0)
+        towerPanel.size = CGSize(width: panelWidth, height: size.height)
+
+        baseHealthLabel.position = CGPoint(x: panelLeftEdge - 12, y: hudTop - 12)
+
+        // Tell the tower system where towers may be placed (left of the panel).
         towerManager.playfield = TowerManager.Playfield(
             minX: lastSafeArea.left + 24,
-            maxX: size.width - lastSafeArea.right - 24,
-            minY: panelHeight + 24,
+            maxX: panelLeftEdge - 24,
+            minY: lastSafeArea.bottom + 40,
             maxY: size.height - lastSafeArea.top - 24
         )
 
-        let heading = makeLabel("Towers · $\(towerSelection.money)", size: 16)
+        let heading = makeLabel("Towers", size: 16)
         heading.horizontalAlignmentMode = .left
-        heading.position = CGPoint(x: left, y: panelHeight - 22)
+        heading.position = CGPoint(x: 8, y: panelTop - 24)
         towerPanel.addChild(heading)
 
         // (No Cancel button: placement is drag-and-drop, so releasing over
@@ -227,13 +279,44 @@ final class GameScene: SKScene {
         // Sell button: only while a placed tower is selected (never at the
         // same time as placement mode).
         if let selectedTower = towerManager.selected {
-            let refund = TowerManager.sellValue(of: selectedTower.type)
-            let sell = SKSpriteNode(color: .systemRed, size: CGSize(width: 130, height: 36))
-            sell.position = CGPoint(x: size.width - right - 65, y: panelHeight - 22)
+            let refund = TowerManager.sellValue(of: selectedTower)
+            let sell = SKSpriteNode(color: .systemRed, size: CGSize(width: sellWidth, height: 36))
+            sell.position = CGPoint(x: 8 + sellWidth / 2, y: panelTop - 24)
+            heading.isHidden = true // the Sell button takes the heading's spot
             sell.addChild(makeLabel("Sell +$\(refund)"))
             towerPanel.addChild(sell)
             sellButton = sell
         }
+
+        // MH2D-17: while a placed tower is selected, the upgrade panel takes the
+        // place of the tower cards. Tapping empty map brings the cards back.
+        if let selectedTower = towerManager.selected {
+            panelContent = nil
+            panelThumb = nil
+            panelScroll = 0
+            panelMaxScroll = 0
+            panelViewportTop = panelTop - headerHeight + 6
+            panelViewportHeight = max(1, panelViewportTop - lastSafeArea.bottom)
+            buildUpgradePanel(for: selectedTower, panelTop: panelTop - headerHeight + 6, width: cardWidth)
+        } else {
+        // Cards live in a scrolling, clipped area under the heading.
+        let viewportTop = panelTop - headerHeight + 6
+        let viewportHeight = max(1, viewportTop - lastSafeArea.bottom)
+        let contentHeight = CGFloat(towers.count) * (cardHeight + gap) + 8
+        panelMaxScroll = max(0, contentHeight - viewportHeight)
+        panelScroll = min(max(0, panelScroll), panelMaxScroll)
+        panelViewportTop = viewportTop
+        panelViewportHeight = viewportHeight
+        let crop = SKCropNode()
+        let mask = SKSpriteNode(color: .white, size: CGSize(width: panelWidth, height: viewportHeight))
+        mask.position = CGPoint(x: panelWidth / 2, y: lastSafeArea.bottom + viewportHeight / 2)
+        crop.maskNode = mask
+        let content = SKNode()
+        content.position = CGPoint(x: 0, y: panelScroll)
+        crop.addChild(content)
+        towerPanel.addChild(crop)
+        panelContent = content
+        panelThumb = nil
 
         for (index, tower) in towers.enumerated() {
             let enabled = towerSelection.canSelect(tower)
@@ -244,53 +327,166 @@ final class GameScene: SKScene {
             card.lineWidth = selected ? 3 : 1
             card.alpha = enabled ? 1 : 0.45
             card.position = CGPoint(
-                x: left + cardWidth / 2 + CGFloat(index % columns) * (cardWidth + gap),
-                y: panelHeight - 48 - cardHeight / 2 - CGFloat(index / columns) * (cardHeight + gap)
+                x: 8 + cardWidth / 2 + CGFloat(index % columns) * (cardWidth + gap),
+                y: panelTop - headerHeight - cardHeight / 2 - CGFloat(index / columns) * (cardHeight + gap)
             )
-            let icon = tower.makeIcon(enabled: enabled)
-            icon.position = CGPoint(x: -cardWidth / 2 + 22, y: 14)
-            card.addChild(icon)
-            let name = makeLabel(tower.displayName, size: 14)
-            name.horizontalAlignmentMode = .left
-            name.position = CGPoint(x: -cardWidth / 2 + 42, y: 14)
+            // Compact card: name on top, icon + price in the middle, status below.
+            let name = makeLabel(tower.displayName, size: 12)
+            name.position = CGPoint(x: 0, y: cardHeight / 2 - 13)
             card.addChild(name)
-            let price = makeLabel("$\(tower.cost)", size: 16)
-            price.position = CGPoint(x: 0, y: -8)
+            let icon = tower.makeIcon(enabled: enabled)
+            icon.position = CGPoint(x: -cardWidth / 2 + 24, y: -2)
+            card.addChild(icon)
+            let price = makeLabel("$\(tower.cost)", size: 14)
+            price.position = CGPoint(x: cardWidth * 0.18, y: -2)
             card.addChild(price)
-            let status = makeLabel(enabled ? (selected ? "Selected" : "Select") : "Need $\(tower.cost - towerSelection.money)", size: 11)
-            status.position = CGPoint(x: 0, y: -27)
+            let status = makeLabel(enabled ? (selected ? "Selected" : "Select") : "Need $\(tower.cost - towerSelection.money)", size: 10)
+            status.position = CGPoint(x: 0, y: -cardHeight / 2 + 9)
             card.addChild(status)
-            towerPanel.addChild(card)
+            if !enabled { needLabels.append((tower, status)) }
+            content.addChild(card)
             towerCards.append((tower, card))
+        }
+
+        // Thin scroll bar on the panel's edge when there is more to scroll to.
+        if panelMaxScroll > 0 {
+            panelThumbHeight = max(24, viewportHeight * viewportHeight / (viewportHeight + panelMaxScroll))
+            let thumb = SKShapeNode(rectOf: CGSize(width: 3, height: panelThumbHeight), cornerRadius: 1.5)
+            thumb.fillColor = UIColor.white.withAlphaComponent(0.4)
+            thumb.strokeColor = .clear
+            thumb.zPosition = 5
+            thumb.position.x = panelWidth - lastSafeArea.right - 3
+            towerPanel.addChild(thumb)
+            panelThumb = thumb
+            applyPanelScroll()
         }
 
         if towers.isEmpty {
             let empty = makeLabel("No towers unlocked yet")
-            empty.position = CGPoint(x: size.width / 2, y: lastSafeArea.bottom + 50)
+            empty.position = CGPoint(x: panelWidth / 2 - lastSafeArea.right / 2, y: size.height / 2)
             towerPanel.addChild(empty)
         }
+        } // end: tower cards (no placed tower selected)
 
-        selectionLabel.position = CGPoint(x: left, y: panelHeight + 18)
+        selectionLabel.position = CGPoint(x: left, y: lastSafeArea.bottom + 12)
         if let tower = towerSelection.selectedTower {
             selectionLabel.text = "Drag to the map and release to place \(tower.displayName)"
         } else if let selectedTower = towerManager.selected {
-            selectionLabel.text = "\(selectedTower.type.displayName) selected · tap Sell to remove it"
+            selectionLabel.text = "\(selectedTower.type.displayName) selected · upgrade or sell it · tap the map to close"
         } else {
             selectionLabel.text = "Drag a tower from the panel onto the map"
         }
+        drawnAffordability = currentAffordability()
         debugLabel?.position = CGPoint(x: left, y: size.height - lastSafeArea.top - 24)
         updatePlacementPreview()
         setUpPath()
     }
 
+    // MARK: - MH2D-17: Upgrade panel
+
+    /// Draws the upgrade view in the tower panel: the tower's name and tier,
+    /// current -> next numbers, and the Upgrade button (or MAX at the cap).
+    /// `panelTop` is the top edge of the area under the heading.
+    private func buildUpgradePanel(for tower: TowerManager.PlacedTower, panelTop: CGFloat, width: CGFloat) {
+        let centerX = 8 + width / 2
+        let box = SKShapeNode(rectOf: CGSize(width: width, height: 10), cornerRadius: 10) // resized below
+        box.fillColor = UIColor(white: 0.18, alpha: 1)
+        box.strokeColor = UIColor(white: 0.35, alpha: 1)
+        box.lineWidth = 1
+        towerPanel.addChild(box)
+
+        var y = panelTop - 12
+
+        let name = makeLabel(tower.type.displayName, size: 14)
+        name.position = CGPoint(x: centerX, y: y - 6)
+        towerPanel.addChild(name)
+        y -= 22
+
+        let tierText = tower.tier >= TowerUpgrade.maxTier ? "Tier \(tower.tier) · MAX" : "Tier \(tower.tier) / \(TowerUpgrade.maxTier)"
+        let tierLabel = makeLabel(tierText, size: 11)
+        tierLabel.fontColor = tower.tier >= TowerUpgrade.maxTier ? .systemYellow : UIColor(white: 0.75, alpha: 1)
+        tierLabel.position = CGPoint(x: centerX, y: y - 4)
+        towerPanel.addChild(tierLabel)
+        y -= 18
+
+        // Tier pips: filled up to the current tier.
+        for i in 0..<TowerUpgrade.maxTier {
+            let pip = SKShapeNode(circleOfRadius: 4)
+            pip.fillColor = i < tower.tier ? .systemYellow : UIColor(white: 0.3, alpha: 1)
+            pip.strokeColor = UIColor(white: 0.1, alpha: 1)
+            pip.lineWidth = 1
+            pip.position = CGPoint(x: centerX + (CGFloat(i) - CGFloat(TowerUpgrade.maxTier - 1) / 2) * 14, y: y - 4)
+            towerPanel.addChild(pip)
+        }
+        y -= 20
+
+        // Current -> next stats.
+        for line in TowerUpgrade.statLines(for: tower.type, tier: tower.tier) {
+            let title = makeLabel(line.name, size: 10)
+            title.fontColor = UIColor(white: 0.65, alpha: 1)
+            title.position = CGPoint(x: centerX, y: y - 5)
+            towerPanel.addChild(title)
+            let value: SKLabelNode
+            if let next = line.next {
+                value = makeLabel("\(line.current) → \(next)", size: 13)
+                value.fontColor = .systemGreen
+            } else {
+                value = makeLabel(line.current, size: 13)
+            }
+            value.position = CGPoint(x: centerX, y: y - 20)
+            towerPanel.addChild(value)
+            y -= 34
+        }
+        y -= 4
+
+        // Upgrade button (or MAX).
+        let buttonHeight: CGFloat = 40
+        if let cost = towerManager.upgradeCost {
+            let canAfford = wallet.canAfford(cost)
+            let button = SKSpriteNode(color: canAfford ? .systemGreen : UIColor(white: 0.28, alpha: 1),
+                                      size: CGSize(width: width - 16, height: buttonHeight))
+            button.position = CGPoint(x: centerX, y: y - buttonHeight / 2)
+            let buttonLabel = makeLabel(canAfford ? "Upgrade $\(cost)" : "Need $\(cost - wallet.money)", size: 13)
+            button.addChild(buttonLabel)
+            if !canAfford { upgradeNeedLabel = (cost, buttonLabel) }
+            towerPanel.addChild(button)
+            upgradeButton = canAfford ? button : nil
+            y -= buttonHeight
+        } else {
+            let button = SKSpriteNode(color: UIColor(white: 0.28, alpha: 1), size: CGSize(width: width - 16, height: buttonHeight))
+            button.position = CGPoint(x: centerX, y: y - buttonHeight / 2)
+            let max = makeLabel("MAX TIER", size: 13)
+            max.fontColor = .systemYellow
+            button.addChild(max)
+            towerPanel.addChild(button)
+            y -= buttonHeight
+        }
+        y -= 10
+
+        // Fit the background box around everything drawn above.
+        let boxTop = panelTop
+        let boxHeight = boxTop - y
+        box.path = CGPath(roundedRect: CGRect(x: -width / 2, y: -boxHeight / 2, width: width, height: boxHeight),
+                          cornerWidth: 10, cornerHeight: 10, transform: nil)
+        box.position = CGPoint(x: centerX, y: boxTop - boxHeight / 2)
+    }
+
+    /// Pay for and apply the selected tower's next upgrade.
+    private func upgradeSelectedTower() {
+        guard let cost = towerManager.upgradeCost, wallet.canAfford(cost) else { return }
+        guard towerManager.upgradeSelected() else { return }
+        wallet.spend(cost)
+        refreshTowerPanel()         // show the new tier right away
+    }
+
     // MARK: - Map
 
-    /// Builds (or re-fits) the zombie route above the tower panel.
+    /// Builds (or re-fits) the zombie route in the space left of the tower panel.
     private func setUpPath() {
         let bounds = GamePath.Bounds(
             left: lastSafeArea.left + 40,
-            right: size.width - lastSafeArea.right - 40,
-            bottom: towerPanel.size.height + 60,
+            right: towerPanel.position.x - 40,
+            bottom: lastSafeArea.bottom + 60,
             top: size.height - lastSafeArea.top - 60
         )
         // If the route moved, put existing zombies at the same spot along it.
@@ -309,6 +505,15 @@ final class GameScene: SKScene {
         refreshTowerPanel()
     }
 
+    /// Moves the cards (and the little scroll bar) to match `panelScroll`.
+    private func applyPanelScroll() {
+        panelContent?.position.y = panelScroll
+        if let thumb = panelThumb, panelMaxScroll > 0 {
+            let travel = panelViewportHeight - panelThumbHeight
+            thumb.position.y = panelViewportTop - panelThumbHeight / 2 - (panelScroll / panelMaxScroll) * travel
+        }
+    }
+
     private func updatePlacementPreview() {
         placementPreview.removeAllChildren()
         guard let tower = towerSelection.selectedTower else {
@@ -316,16 +521,15 @@ final class GameScene: SKScene {
             return
         }
         placementPreview.isHidden = false
-        let outline = SKShapeNode(circleOfRadius: TowerManager.radius)
-        outline.strokeColor = .systemYellow
-        outline.lineWidth = 2
         // Range radius of the tower being dragged.
         placementPreview.addChild(TowerVisuals.makeRangeRing(radius: tower.spec.range))
-        placementPreview.addChild(outline)
-        previewOutline = outline
-        placementPreview.addChild(tower.makeIcon(enabled: true))
+        // No ring: the tower itself turns red when it can't go here.
+        previewOutline = nil
+        let previewIcon = tower.makeIcon(enabled: true)
+        previewIcon.name = "previewIcon"
+        placementPreview.addChild(previewIcon)
         if !isDraggingTower { // a kill can refresh the panel mid-drag; don't move the preview then
-            placementPreview.position = CGPoint(x: size.width / 2, y: (towerPanel.size.height + size.height) / 2)
+            placementPreview.position = CGPoint(x: towerPanel.position.x / 2, y: size.height / 2)
         }
         updatePreviewValidity()
     }
@@ -354,21 +558,29 @@ final class GameScene: SKScene {
         let panelPoint = touch.location(in: towerPanel)
         isDraggingTower = false
         touchStartedOnSell = false
+        touchStartedOnUpgrade = false
 
         // Panel touches must not fall through to the map.
-        if point.y <= towerPanel.size.height {
+        if point.x >= towerPanel.position.x {
             if let sell = sellButton, sell.contains(panelPoint) {
                 touchStartedOnSell = true
                 return
             }
-            for (tower, card) in towerCards where card.contains(panelPoint) {
-                if towerSelection.select(tower) { // false if it can't be afforded
-                    towerManager.deselect()        // picking a card leaves "tower selected" mode
-                    isDraggingTower = true
-                    refreshTowerPanel()            // shows the preview
-                    movePlacementPreview(to: point)
-                }
+            if let upgrade = upgradeButton, upgrade.contains(panelPoint) {
+                touchStartedOnUpgrade = true
                 return
+            }
+            // Remember where the touch began: dragging up/down scrolls the
+            // panel, pulling a card to the left starts placing that tower.
+            panelTouchStart = point
+            panelScrollStart = panelScroll
+            isScrollingPanel = false
+            pendingCard = nil
+            if let content = panelContent, point.y < panelViewportTop {
+                let contentPoint = touch.location(in: content)
+                for (tower, card) in towerCards where card.contains(contentPoint) {
+                    pendingCard = tower
+                }
             }
             return
         }
@@ -380,8 +592,36 @@ final class GameScene: SKScene {
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard isDraggingTower, let touch = touches.first else { return }
-        movePlacementPreview(to: touch.location(in: self))
+        guard let touch = touches.first else { return }
+        if isDraggingTower {
+            movePlacementPreview(to: touch.location(in: self))
+            return
+        }
+        guard let start = panelTouchStart else { return }
+        let point = touch.location(in: self)
+        let dx = point.x - start.x
+        let dy = point.y - start.y
+
+        // Pulled a card out to the left: pick up that tower.
+        if !isScrollingPanel, let tower = pendingCard, dx < -10, abs(dx) > abs(dy) {
+            pendingCard = nil
+            panelTouchStart = nil
+            if towerSelection.select(tower) { // false if it can't be afforded
+                towerManager.deselect()        // picking a card leaves "tower selected" mode
+                isDraggingTower = true
+                refreshTowerPanel()            // shows the preview
+                movePlacementPreview(to: point)
+            }
+            return
+        }
+
+        // Otherwise an up/down drag scrolls the panel.
+        if isScrollingPanel || abs(dy) > 8 {
+            isScrollingPanel = true
+            pendingCard = nil
+            panelScroll = min(max(0, panelScrollStart + dy), panelMaxScroll)
+            applyPanelScroll()
+        }
     }
 
     /// Release: place the tower if the finger is over the map and the spot
@@ -389,18 +629,29 @@ final class GameScene: SKScene {
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard !isGameOver else { return }
         guard let touch = touches.first else { return }
+        panelTouchStart = nil
+        pendingCard = nil
+        isScrollingPanel = false
 
         if isDraggingTower {
             isDraggingTower = false
             let releasePoint = touch.location(in: self)
             // Use the final finger position, even if no "moved" events arrived.
             movePlacementPreview(to: releasePoint)
-            if releasePoint.y > towerPanel.size.height {
+            if releasePoint.x < towerPanel.position.x {
                 placeTower(at: placementPreview.position)
             }
             if towerSelection.isPlacementMode { // released on panel or invalid spot
                 towerSelection.cancel()
                 refreshTowerPanel()
+            }
+            return
+        }
+
+        if touchStartedOnUpgrade {
+            touchStartedOnUpgrade = false
+            if let upgrade = upgradeButton, upgrade.contains(touch.location(in: towerPanel)) {
+                upgradeSelectedTower()
             }
             return
         }
@@ -415,6 +666,10 @@ final class GameScene: SKScene {
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         touchStartedOnSell = false
+        touchStartedOnUpgrade = false
+        panelTouchStart = nil
+        pendingCard = nil
+        isScrollingPanel = false
         if isDraggingTower {
             isDraggingTower = false
             towerSelection.cancel()
@@ -430,10 +685,36 @@ final class GameScene: SKScene {
         updatePreviewValidity()
     }
 
-    /// Green outline = can place here, red = can't.
+    /// The dragged tower looks normal where it can be placed and turns
+    /// completely red where it can't.
+    /// Every shape drawn anywhere inside a node (the tower's base and top).
+    private func allShapes(in node: SKNode) -> [SKShapeNode] {
+        var shapes: [SKShapeNode] = []
+        for child in node.children {
+            if let shape = child as? SKShapeNode { shapes.append(shape) }
+            shapes += allShapes(in: child)
+        }
+        return shapes
+    }
+
     private func updatePreviewValidity() {
-        previewOutline?.strokeColor = towerManager.isValidPlacement(at: placementPreview.position)
-            ? .systemGreen : .systemRed
+        let valid = towerManager.isValidPlacement(at: placementPreview.position)
+        guard let icon = placementPreview.childNode(withName: "previewIcon") else { return }
+        for piece in allShapes(in: icon) {
+            // Remember the tower's real colors the first time so they can be restored.
+            if piece.userData == nil { piece.userData = NSMutableDictionary() }
+            if piece.userData?["fill"] == nil {
+                piece.userData?["fill"] = piece.fillColor
+                piece.userData?["stroke"] = piece.strokeColor
+            }
+            if valid {
+                piece.fillColor = piece.userData?["fill"] as? UIColor ?? piece.fillColor
+                piece.strokeColor = piece.userData?["stroke"] as? UIColor ?? piece.strokeColor
+            } else {
+                piece.fillColor = .systemRed
+                piece.strokeColor = UIColor(red: 0.45, green: 0.05, blue: 0.05, alpha: 1)
+            }
+        }
     }
 
     // MARK: - Buying and selling towers (money lives here; rules live in TowerManager)
@@ -451,8 +732,9 @@ final class GameScene: SKScene {
 
     /// Remove the selected tower, refund part of its cost, free its spot.
     private func sellSelectedTower() {
-        guard let type = towerManager.sellSelected() else { return }
-        wallet.add(TowerManager.sellValue(of: type))
+        guard let refund = towerManager.sellSelected() else { return }
+        wallet.add(refund)
+        refreshTowerPanel()         // back to the tower cards right away
     }
 
     // MARK: - MH2D-36: Fixed-timestep update loop
@@ -472,6 +754,10 @@ final class GameScene: SKScene {
     override func update(_ currentTime: TimeInterval) {
         if let view, view.safeAreaInsets != lastSafeArea {
             refreshTowerPanel()
+        }
+        if panelDirty, currentTime - lastPanelRefreshTime >= panelRefreshInterval {
+            lastPanelRefreshTime = currentTime
+            refreshTowerPanel() // clears panelDirty
         }
         defer { lastUpdateTime = currentTime }
 

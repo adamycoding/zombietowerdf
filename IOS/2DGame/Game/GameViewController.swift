@@ -30,8 +30,8 @@ class GameViewController: UIViewController {
         guard let skView = self.view as? SKView else { return }
 
         skView.ignoresSiblingOrder = true
-        skView.showsFPS = true
-        skView.showsNodeCount = true
+        skView.showsFPS = false
+        skView.showsNodeCount = false
         startNewGame(in: skView)
 
         // MH2D-37: wire lifecycle notifications to the scene's pause/resume.

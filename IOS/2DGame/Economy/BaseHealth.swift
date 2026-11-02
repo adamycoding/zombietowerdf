@@ -13,7 +13,7 @@ import Foundation
 final class BaseHealth {
 
     /// Health the base starts a game with.
-    static let startingHealth = 5
+    static let startingHealth = 150
 
     let maxHealth: Int
     private(set) var current: Int

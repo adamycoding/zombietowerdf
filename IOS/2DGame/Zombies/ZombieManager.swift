@@ -13,7 +13,8 @@ import UIKit
 final class ZombieManager {
 
     struct Zombie {
-        let node: SKShapeNode
+        let node: SKSpriteNode // one baked sprite per zombie (cheap to draw)
+        var type: ZombieType = .normal // MH2D-95: decides resistances
         var nextWaypointIndex: Int = 1
         var hurtbox = Hurtbox(radius: ZombieManager.radius) // MH2D-45
         var slowTimer: TimeInterval = 0 // > 0 while slowed by an ice tower
@@ -31,7 +32,7 @@ final class ZombieManager {
     static let healthBarWidth: CGFloat = 24
     /// MH2D-53: money paid to the player when a normal zombie is killed.
     /// Enemy types (MH2D-20) will each set their own number.
-    static let normalReward = 10
+    static let normalReward = 5
 
     static let iceSlowFactor: CGFloat = 0.45   // 45% speed while slowed
     static let iceSlowDuration: TimeInterval = 2.0
@@ -54,28 +55,22 @@ final class ZombieManager {
     private let world: SKNode
     private let path: GamePath
     private var spawnTimer: TimeInterval = 0
-    private let waves: [WaveDefinition] = [
-        WaveDefinition(
-            zombieTypes: Array(repeating: .normal, count: 5),
-            spawnInterval: 1.5
-        ),
-        WaveDefinition(
-            zombieTypes: Array(repeating: .normal, count: 8),
-            spawnInterval: 1.2
-        ),
-        WaveDefinition(
-            zombieTypes: Array(repeating: .normal, count: 10),
-            spawnInterval: 1.0
-        ),
-        WaveDefinition(
-            zombieTypes: Array(repeating: .normal, count: 12),
-            spawnInterval: 0.9
-        ),
-        WaveDefinition(
-            zombieTypes: Array(repeating: .normal, count: 15),
-            spawnInterval: 0.8
-        )
-    ]
+    /// Total number of waves in a game.
+    static let totalWaveCount = 40
+
+    private let waves: [WaveDefinition] = ZombieManager.makeWaves(total: ZombieManager.totalWaveCount)
+
+    /// Wave 1 has 10 zombies and every wave after it adds 4 more (wave 40 has
+    /// 166). They also spawn faster as the waves go on, down to one every
+    /// 0.25 s, so the difficulty keeps climbing the whole way.
+    private static func makeWaves(total: Int) -> [WaveDefinition] {
+        return (1...total).map { number in
+            let count = 10 + (number - 1) * 4
+            let interval = max(0.25, 1.2 - Double(number - 1) * 0.025)
+            return WaveDefinition(zombieTypes: Array(repeating: .normal, count: count),
+                                  spawnInterval: interval)
+        }
+    }
 
     private var waveDefinition: WaveDefinition {
         waves[currentWave - 1]
@@ -115,6 +110,29 @@ final class ZombieManager {
         }
     }
     
+    /// Drawing a zombie from ~15 little shapes is slow (every shape is its own
+    /// draw call), and a late wave has well over a hundred of them. So the
+    /// zombie is drawn from shapes ONCE, turned into a texture, and every
+    /// zombie is then a single sprite using that texture.
+    private static var bakedBody: (texture: SKTexture, size: CGSize, anchor: CGPoint)?
+
+    private static func bakeBody(using draw: () -> SKShapeNode) -> (texture: SKTexture, size: CGSize, anchor: CGPoint) {
+        if let baked = bakedBody { return baked }
+        let shapes = draw()
+        shapes.fillColor = .systemGreen
+        shapes.strokeColor = .black
+        shapes.lineWidth = 2
+        // Freeze the walking legs: a baked picture can't animate.
+        func stopActions(_ node: SKNode) { node.removeAllActions(); node.children.forEach(stopActions) }
+        stopActions(shapes)
+        let frame = shapes.calculateAccumulatedFrame()
+        let texture = SKView().texture(from: shapes) ?? SKTexture()
+        let anchor = CGPoint(x: -frame.minX / frame.width, y: -frame.minY / frame.height)
+        let baked = (texture: texture, size: frame.size, anchor: anchor)
+        bakedBody = baked
+        return baked
+    }
+
     private func makeZombieNode() -> SKShapeNode {
         // The main shape is now the head.
         // Existing damage and ice effects still change its color.
@@ -218,35 +236,35 @@ final class ZombieManager {
 
     private func spawn(type: ZombieType) {        guard let startPoint = path.waypoints.first else { return }
 
-        let zombie = makeZombieNode()
+        let body = ZombieManager.bakeBody { makeZombieNode() }
+        let zombie = SKSpriteNode(texture: body.texture, size: body.size)
+        zombie.anchorPoint = body.anchor
+        zombie.color = .systemTeal       // used as the tint while slowed / hit / dying
+        zombie.colorBlendFactor = 0
         zombie.name = "zombie"
-        switch type {
-        case .normal:
-            zombie.fillColor = .systemGreen
-        }
-        zombie.strokeColor = .black
-        zombie.lineWidth = 2
         zombie.position = startPoint
         zombie.zPosition = Layer.zombies.rawValue
-        // MH2D-12: outline of the hurtbox (only visible when the overlay is on)
-        zombie.addChild(DebugOverlay.makeCircle(radius: ZombieManager.radius, color: .yellow, name: "hurtboxDebug"))
+        // MH2D-12: outline of the hurtbox. Only built while the overlay is on,
+        // so normal play doesn't pay for a hidden node on every zombie.
+        if DebugOverlay.showHitboxes {
+            zombie.addChild(DebugOverlay.makeCircle(radius: ZombieManager.radius, color: .yellow, name: "hurtboxDebug"))
+        }
+        // (The health bar is made the first time the zombie is hurt.)
 
-        // MH2D-52: small health bar above the zombie (red = missing health).
-        let width = ZombieManager.healthBarWidth
-        let barBack = SKSpriteNode(color: .systemRed, size: CGSize(width: width, height: 3))
-        barBack.name = "healthBack"
-        barBack.position = CGPoint(x: 0, y: ZombieManager.radius + 6)
-        barBack.zPosition = 4
-        let barFill = SKSpriteNode(color: .systemGreen, size: CGSize(width: width, height: 3))
-        barFill.name = "healthFill"
-        barFill.anchorPoint = CGPoint(x: 0, y: 0.5)
-        barFill.position = CGPoint(x: -width / 2, y: 0)
-        barBack.addChild(barFill)
-        barBack.isHidden = true // shown once the zombie has taken damage
-        zombie.addChild(barBack)
+        // Shamble: a slow side-to-side lurch with a squash-and-stretch bob,
+        // each zombie starting at a different point in the cycle.
+        zombie.run(.sequence([
+            .wait(forDuration: Double.random(in: 0...0.5)),
+            .repeatForever(.sequence([
+                .group([.rotate(toAngle: 0.14, duration: 0.22), .scaleY(to: 0.93, duration: 0.22)]),
+                .group([.rotate(toAngle: 0.0, duration: 0.22), .scaleY(to: 1.05, duration: 0.22)]),
+                .group([.rotate(toAngle: -0.14, duration: 0.22), .scaleY(to: 0.93, duration: 0.22)]),
+                .group([.rotate(toAngle: 0.0, duration: 0.22), .scaleY(to: 1.05, duration: 0.22)])
+            ]))
+        ]), withKey: "shamble")
 
         world.addChild(zombie)
-        zombies.append(Zombie(node: zombie))
+        zombies.append(Zombie(node: zombie, type: type))
     }
 
     // MARK: Movement
@@ -259,13 +277,20 @@ final class ZombieManager {
             let zombie = zombies[index].node
             // Ice tower slow: zombies crawl at iceSlowFactor of normal speed.
             var speedMultiplier: CGFloat = 1
-            if zombies[index].slowTimer > 0 {
+            let slowed = zombies[index].slowTimer > 0
+            if slowed {
                 zombies[index].slowTimer -= deltaTime
                 speedMultiplier = ZombieManager.iceSlowFactor
-                zombie.fillColor = .systemTeal
-            } else {
-                zombie.fillColor = .systemGreen
             }
+            // Slowed zombies are tinted teal (a hit flash in progress wins).
+            if zombie.action(forKey: "hitFlash") == nil {
+                let target: CGFloat = slowed ? 0.55 : 0
+                if zombie.colorBlendFactor != target {
+                    zombie.color = .systemTeal
+                    zombie.colorBlendFactor = target
+                }
+            }
+            zombie.speed = speedMultiplier // slowed zombies shamble slower too
             var remainingMovement = speed * speedMultiplier * CGFloat(deltaTime)
 
             while remainingMovement > 0 {
@@ -335,12 +360,16 @@ final class ZombieManager {
     /// by exactly `damage`; the health bar and a short white flash show it.
     /// A killed zombie is removed and pays its reward (MH2D-53); the death
     /// effect is MH2D-54.
-    func applyDamage(at index: Int, damage: Int) {
+    func applyDamage(at index: Int, damage: Int, type: DamageType = .bullet) {
         guard zombies.indices.contains(index) else { return }
-        zombies[index].health = max(0, zombies[index].health - damage)
+        // MH2D-95: this zombie's resistance to the damage type scales the hit
+        // (a real hit always does at least 1).
+        let multiplier = zombies[index].type.damageMultiplier(for: type)
+        let dealt = damage > 0 ? max(1, Int((Double(damage) * multiplier).rounded())) : 0
+        zombies[index].health = max(0, zombies[index].health - dealt)
         let state = zombies[index]
         updateHealthBar(of: state)
-        flashHit(state.node)
+        flashHit(state.node, color: type == .bullet ? .white : type.effectColor)
 
         if state.health <= 0 {
             die(at: index)
@@ -358,11 +387,14 @@ final class ZombieManager {
     }
 
     /// MH2D-54: everything here is cosmetic and cleans itself up.
-    private func playDeathEffect(on node: SKShapeNode, reward: Int) {
+    private func playDeathEffect(on node: SKSpriteNode, reward: Int) {
         node.removeAllActions()
-        node.strokeColor = .black // a hit flash cut short would leave the outline white
+        node.speed = 1
+        node.zRotation = 0
+        node.yScale = 1
         node.childNode(withName: "healthBack")?.isHidden = true
-        node.fillColor = .systemRed
+        node.color = .systemRed
+        node.colorBlendFactor = 0.8
         node.run(.sequence([
             .group([.fadeOut(withDuration: 0.2), .scale(to: 1.5, duration: 0.2)]),
             .removeFromParent()
@@ -401,22 +433,38 @@ final class ZombieManager {
         ]))
     }
 
+    /// MH2D-52: small health bar above the zombie (red = missing health).
+    private func makeHealthBar(on zombie: SKSpriteNode) -> SKSpriteNode {
+        let width = ZombieManager.healthBarWidth
+        let barBack = SKSpriteNode(color: .systemRed, size: CGSize(width: width, height: 3))
+        barBack.name = "healthBack"
+        barBack.position = CGPoint(x: 0, y: ZombieManager.radius + 6)
+        barBack.zPosition = 4
+        let barFill = SKSpriteNode(color: .systemGreen, size: CGSize(width: width, height: 3))
+        barFill.name = "healthFill"
+        barFill.anchorPoint = CGPoint(x: 0, y: 0.5)
+        barFill.position = CGPoint(x: -width / 2, y: 0)
+        barBack.addChild(barFill)
+        zombie.addChild(barBack)
+        return barBack
+    }
+
     /// Resize the green part of the bar to health / maxHealth and show it.
     private func updateHealthBar(of zombie: Zombie) {
-        guard let back = zombie.node.childNode(withName: "healthBack") as? SKSpriteNode,
-              let fill = back.childNode(withName: "healthFill") as? SKSpriteNode else { return }
+        let back = zombie.node.childNode(withName: "healthBack") as? SKSpriteNode ?? makeHealthBar(on: zombie.node)
+        guard let fill = back.childNode(withName: "healthFill") as? SKSpriteNode else { return }
         back.isHidden = false
         let fraction = CGFloat(zombie.health) / CGFloat(max(1, zombie.maxHealth))
         fill.size.width = ZombieManager.healthBarWidth * fraction
     }
 
     /// Brief white flash so each hit is visible.
-    private func flashHit(_ node: SKShapeNode) {
+    private func flashHit(_ node: SKSpriteNode, color: UIColor = .white) {
         node.removeAction(forKey: "hitFlash")
         node.run(.sequence([
-            .run { node.strokeColor = .white },
+            .run { node.color = color; node.colorBlendFactor = 0.85 },
             .wait(forDuration: 0.08),
-            .run { node.strokeColor = .black }
+            .run { node.colorBlendFactor = 0 } // move() puts the slow tint back if needed
         ]), withKey: "hitFlash")
     }
     
