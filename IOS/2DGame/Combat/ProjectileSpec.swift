@@ -28,6 +28,13 @@ struct ProjectileSpec {
     var chainCount: Int = 0              // > 0: lightning that hits this many zombies in a row (Tesla)
     var chainRange: CGFloat = 0          // how far lightning can jump to the next zombie
     var wireDurability: Int = 0          // > 0: lays barbed wire that survives this many zombie hits
+    var slowFactor: CGFloat = 0.45       // ice: zombies move at this share of normal speed (lower = stronger)
+    var slowDuration: TimeInterval = 2.0 // ice: how long one pulse keeps zombies slowed
+
+    /// Range so large it covers the whole map. Such a tower can hit anything it can SEE
+    /// (obstacles still block the shot) so there is no range circle to draw.
+    static let globalRange: CGFloat = 4000
+    var isGlobalRange: Bool { range >= ProjectileSpec.globalRange }
 }
 
 extension TowerType {
@@ -41,7 +48,7 @@ extension TowerType {
             // Machine gun: weaker shots than the Soldier but 2.4x the fire rate.
             return ProjectileSpec(radius: 3, speed: 420, color: .systemYellow, range: 75, fireInterval: 0.25, lifetime: 1.0, damage: 1)
         case .sniper:
-            return ProjectileSpec(radius: 3, speed: 700, color: .white, range: 168, fireInterval: 1.6, lifetime: 1.2, damage: 3)
+            return ProjectileSpec(radius: 3, speed: 700, color: .white, range: ProjectileSpec.globalRange, fireInterval: 1.6, lifetime: 2.0, damage: 3)
         case .grenadier:
             return ProjectileSpec(radius: 6, speed: 260, color: .systemOrange, range: 110, fireInterval: 2.2, lifetime: 1.6, damage: 2, damageType: .explosive, blastRadius: 48)
         case .flamethrower:

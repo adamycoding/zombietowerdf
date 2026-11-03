@@ -46,7 +46,11 @@ enum TowerUpgrade {
         let t = min(max(0, tier), maxTier)
         guard t > 0 else { return spec }
         spec.fireInterval *= pow(fireIntervalFactor, Double(t))
-        spec.range *= pow(rangeFactor, CGFloat(t))
+        if !spec.isGlobalRange { spec.range *= pow(rangeFactor, CGFloat(t)) }
+        if type == .ice { // each tier slows harder and for longer
+            spec.slowFactor *= pow(0.85, CGFloat(t))
+            spec.slowDuration += 0.4 * Double(t)
+        }
         if spec.damage > 0 { spec.damage += max(0, t - 1) } // +1 at tier 2 and again at tier 3
         if spec.wireDurability > 0 { spec.wireDurability += wireDurabilityPerTier * t }
         return spec
@@ -73,8 +77,24 @@ enum TowerUpgrade {
         if now.damage > 0 {
             lines.append(line("Damage", "\(now.damage)", upcoming.map { "\($0.damage)" }))
         }
-        lines.append(line("Range", "\(Int(now.range.rounded()))", upcoming.map { "\(Int($0.range.rounded()))" }))
-        lines.append(line("Speed", shots(now), upcoming.map { shots($0) }))
+        if now.isGlobalRange {
+            lines.append(line("Range", "Global", nil))
+        } else {
+            lines.append(line("Range", "\(Int(now.range.rounded()))", upcoming.map { "\(Int($0.range.rounded()))" }))
+        }
+        // Ice and Barbed Wire don't "shoot": show what their timer actually does.
+        func seconds(_ s: ProjectileSpec) -> String { String(format: "%.1fs", s.fireInterval) }
+        if type == .ice {
+            lines.append(line("Pulse every", seconds(now), upcoming.map { seconds($0) }))
+            func slowText(_ s: ProjectileSpec) -> String { "\(Int(((1 - s.slowFactor) * 100).rounded()))%" }
+            func durText(_ s: ProjectileSpec) -> String { String(format: "%.1fs", s.slowDuration) }
+            lines.append(line("Slow", slowText(now), upcoming.map { slowText($0) }))
+            lines.append(line("Slow time", durText(now), upcoming.map { durText($0) }))
+        } else if type == .trapper {
+            lines.append(line("Lays wire every", seconds(now), upcoming.map { seconds($0) }))
+        } else {
+            lines.append(line("Speed", shots(now), upcoming.map { shots($0) }))
+        }
         if now.wireDurability > 0 {
             lines.append(line("Wire", "\(now.wireDurability)", upcoming.map { "\($0.wireDurability)" }))
         }

@@ -11,9 +11,23 @@ import UIKit
 
 final class TowerManager {
 
+    /// Which zombie a tower picks when several are in range.
+    enum TargetPriority: String, CaseIterable {
+        case close = "Close"   // nearest to the tower
+        case far = "Far"       // furthest from the tower (still in range)
+        case front = "Front"   // furthest along the road (closest to the base)
+        case back = "Back"     // least far along the road (just came in)
+
+        var next: TargetPriority {
+            let all = TargetPriority.allCases
+            return all[(all.firstIndex(of: self)! + 1) % all.count]
+        }
+    }
+
     struct PlacedTower {
         let type: TowerType
         let node: SKNode
+        var priority: TargetPriority = .close
         /// MH2D-17: how many times this tower has been upgraded (0...TowerUpgrade.maxTier).
         var tier = 0
 
@@ -33,8 +47,10 @@ final class TowerManager {
         }
     }
 
-    static let radius: CGFloat = 22
-    static let gap: CGFloat = 6        // min empty space between towers
+    /// Size of a tower's footprint for placement: roughly the drawn tower, so a
+    /// tower can go anywhere its picture doesn't touch a road, rock or another tower.
+    static let radius: CGFloat = 12    // fallback / screen-edge margin (half the 24pt icon)
+    static let gap: CGFloat = 1        // empty space left between two towers (they never quite touch)
     static let sellRefundRate: Double = 0.7
 
     private(set) var placed: [PlacedTower] = []
@@ -83,21 +99,92 @@ final class TowerManager {
 
     /// A spot is valid if it is on the map, clear of the path edge, and
     /// doesn't overlap an already placed tower.
-    func isValidPlacement(at point: CGPoint) -> Bool {
-        guard playfield.contains(point) else { return false }
-        if path.distance(from: point) < GamePath.halfWidth + TowerManager.radius { return false }
+    func isValidPlacement(at point: CGPoint, type: TowerType? = nil) -> Bool {
+        let box = type.map { footprint(of: $0) }
+            ?? CGRect(x: -TowerManager.radius, y: -TowerManager.radius, width: TowerManager.radius * 2, height: TowerManager.radius * 2)
+        let mine = box.offsetBy(dx: point.x, dy: point.y)
+
+        // The drawn tower must stay inside the map (it may touch the very edge).
+        guard mine.minX >= playfield.minX, mine.maxX <= playfield.maxX,
+              mine.minY >= playfield.minY, mine.maxY <= playfield.maxY else { return false }
+
+        // The road's drawn edge is 3 points wider than the road itself. Check a grid of
+        // points over the tower's drawing against it.
+        let clearance = GamePath.halfWidth + 3
+        for i in 0...4 {
+            for j in 0...4 {
+                let p = CGPoint(x: mine.minX + mine.width * CGFloat(i) / 4, y: mine.minY + mine.height * CGFloat(j) / 4)
+                if path.distance(from: p) < clearance { return false }
+            }
+        }
+        // Trees, rocks and boulders: the drawing must not reach into them.
+        for o in path.obstacles {
+            let nx = min(max(o.center.x, mine.minX), mine.maxX)
+            let ny = min(max(o.center.y, mine.minY), mine.maxY)
+            if hypot(o.center.x - nx, o.center.y - ny) < o.radius { return false }
+        }
+        // Two towers may sit right next to each other, but their drawings must not touch.
         for tower in placed {
-            let d = hypot(point.x - tower.node.position.x, point.y - tower.node.position.y)
-            if d < TowerManager.radius * 2 + TowerManager.gap { return false }
+            let other = footprint(of: tower.type).offsetBy(dx: tower.node.position.x, dy: tower.node.position.y)
+            if mine.insetBy(dx: -TowerManager.gap / 2, dy: -TowerManager.gap / 2)
+                .intersects(other.insetBy(dx: -TowerManager.gap / 2, dy: -TowerManager.gap / 2)) { return false }
         }
         return true
+    }
+
+    /// Picks the zombie this tower shoots: it must be in range and in view, then the
+    /// tower's priority decides (Close / Far / Front / Back).
+    private func pickTarget(for tower: PlacedTower, spec: ProjectileSpec, in all: [ZombieManager.Zombie]) -> Int? {
+        let origin = tower.node.position
+        var best: (index: Int, score: CGFloat)?
+        for (i, zombie) in all.enumerated() {
+            let p = zombie.node.position
+            let d = hypot(p.x - origin.x, p.y - origin.y)
+            guard d <= spec.range,
+                  !spec.isGlobalRange || playfield.contains(p),
+                  !path.isBlocked(from: origin, to: p) else { continue }
+            // Lower score wins.
+            let score: CGFloat
+            switch tower.priority {
+            case .close: score = d
+            case .far: score = -d
+            case .front: score = zombies.remainingDistance(of: zombie)
+            case .back: score = -zombies.remainingDistance(of: zombie)
+            }
+            if best == nil || score < best!.score { best = (i, score) }
+        }
+        return best?.index
+    }
+
+    /// Switches the selected tower to its next target priority.
+    @discardableResult
+    func cycleSelectedPriority() -> TargetPriority? {
+        guard let index = selectedIndex, placed.indices.contains(index) else { return nil }
+        placed[index].priority = placed[index].priority.next
+        return placed[index].priority
+    }
+
+    private var footprints: [TowerType: CGRect] = [:]
+
+    /// The area that is actually drawn for this tower (its outline), measured from its
+    /// picture, relative to the tower's position.
+    func footprint(of type: TowerType) -> CGRect {
+        if let cached = footprints[type] { return cached }
+        let icon = type.makeIcon(enabled: true)
+        var rect = CGRect.null
+        for child in icon.children { rect = rect.union(child.calculateAccumulatedFrame()) }
+        if rect.isNull || rect.width < 8 || rect.height < 8 {
+            rect = CGRect(x: -12, y: -12, width: 24, height: 24)
+        }
+        footprints[type] = rect
+        return rect
     }
 
     /// Builds the tower on the map. Returns false (and does nothing) if the
     /// spot is invalid. The caller handles payment.
     @discardableResult
     func place(_ type: TowerType, at point: CGPoint) -> Bool {
-        guard isValidPlacement(at: point) else { return false }
+        guard isValidPlacement(at: point, type: type) else { return false }
 
         let node = SKNode()
         node.name = "tower"
@@ -119,7 +206,7 @@ final class TowerManager {
             ]))
         ]), withKey: "idle")
         // MH2D-12: shows the tower's range when the hitbox overlay is on.
-        node.addChild(DebugOverlay.makeCircle(radius: type.spec.range,
+        node.addChild(DebugOverlay.makeCircle(radius: min(type.spec.range, 600),
                                               color: UIColor.white.withAlphaComponent(0.5),
                                               name: "rangeDebug"))
 
@@ -154,7 +241,7 @@ final class TowerManager {
         let tower = placed[index]
         // Range ring grows with the range.
         tower.node.childNode(withName: "rangeRing")?.removeFromParent()
-        tower.node.addChild(TowerVisuals.makeRangeRing(radius: tower.spec.range))
+        tower.node.addChild(makeRangeRing(for: tower))
         showTierPips(on: tower)
         // A little pop so the upgrade is noticeable.
         let icon = tower.node.childNode(withName: "towerIcon")
@@ -181,8 +268,46 @@ final class TowerManager {
             dot.position = CGPoint(x: (CGFloat(i) - CGFloat(tower.tier - 1) / 2) * spacing, y: 0)
             pips.addChild(dot)
         }
-        pips.position = CGPoint(x: 0, y: TowerManager.radius + 12)
+        pips.position = CGPoint(x: 0, y: 22 + 12)
         tower.node.addChild(pips)
+    }
+
+    /// The range ring, with dark wedges where an obstacle blocks the view
+    /// (the tower can't shoot anything standing in a wedge).
+    private func makeRangeRing(for tower: PlacedTower) -> SKShapeNode {
+        let fullRange = tower.spec.range
+        // A global-range tower has no circle; its blocked wedges are drawn out to about a screen's length.
+        let range = min(fullRange, 1200)
+        let ring: SKShapeNode
+        if tower.spec.isGlobalRange {
+            ring = SKShapeNode()
+            ring.name = "rangeRing"
+            ring.zPosition = -1
+        } else {
+            ring = TowerVisuals.makeRangeRing(radius: range)
+        }
+        guard tower.type != .ice, tower.type != .trapper else { return ring } // these ignore blocking
+        for o in path.obstacles {
+            let dx = o.center.x - tower.node.position.x
+            let dy = o.center.y - tower.node.position.y
+            let d = hypot(dx, dy)
+            guard d > o.radius, d - o.radius < range else { continue }
+            let centerAngle = atan2(dy, dx)
+            let half = asin(min(1, o.radius / d))
+            let near = sqrt(max(0, d * d - o.radius * o.radius))
+            let a1 = centerAngle - half, a2 = centerAngle + half
+            let wedge = CGMutablePath()
+            wedge.move(to: CGPoint(x: cos(a1) * near, y: sin(a1) * near))
+            wedge.addLine(to: CGPoint(x: cos(a1) * range, y: sin(a1) * range))
+            wedge.addArc(center: .zero, radius: range, startAngle: a1, endAngle: a2, clockwise: false)
+            wedge.addLine(to: CGPoint(x: cos(a2) * near, y: sin(a2) * near))
+            wedge.closeSubpath()
+            let shade = SKShapeNode(path: wedge)
+            shade.fillColor = SKColor.black.withAlphaComponent(0.35)
+            shade.strokeColor = .clear
+            ring.addChild(shade)
+        }
+        return ring
     }
 
     func deselect() {
@@ -196,20 +321,18 @@ final class TowerManager {
     /// Select the placed tower under the touch (if any); otherwise deselect.
     /// Returns true if the selection changed.
     func select(at point: CGPoint) -> Bool {
-        let hit = placed.firstIndex {
-            hypot(point.x - $0.node.position.x, point.y - $0.node.position.y) <= TowerManager.radius + 10
-        }
+        // The nearest tower under the finger (towers can now sit right next to each other).
+        let hit = placed.indices
+            .map { (index: $0, d: hypot(point.x - placed[$0].node.position.x, point.y - placed[$0].node.position.y)) }
+            .filter { $0.d <= TowerManager.radius + 18 }
+            .min { $0.d < $1.d }?.index
         guard hit != selectedIndex else { return false }
         deselect()
         if let hit {
             selectedIndex = hit
-            let ring = SKShapeNode(circleOfRadius: TowerManager.radius + 5)
-            ring.name = "selectionRing"
-            ring.strokeColor = .systemYellow
-            ring.lineWidth = 3
-            placed[hit].node.addChild(ring)
+            // (No yellow selection circle: the range ring shows which tower is selected.)
             // Show how far this tower can shoot while it's selected.
-            placed[hit].node.addChild(TowerVisuals.makeRangeRing(radius: placed[hit].spec.range))
+            placed[hit].node.addChild(makeRangeRing(for: placed[hit]))
         }
         return true
     }
@@ -239,21 +362,16 @@ final class TowerManager {
     /// range; the ice tower pulses a slow on everything in range.
     func updateFire(deltaTime: TimeInterval) {
         updateWires()
+        zombies.prepareProgress()
         for tower in placed {
             let spec = tower.spec
             let key = ObjectIdentifier(tower.node)
 
             // Swing the gun around to face the nearest zombie in range.
             if tower.type.turnsToAim {
-                var closest: (position: CGPoint, distance: CGFloat)?
-                for zombie in zombies.zombies {
-                    let d = hypot(zombie.node.position.x - tower.node.position.x,
-                                  zombie.node.position.y - tower.node.position.y)
-                    if d <= spec.range, d < (closest?.distance ?? .greatestFiniteMagnitude) {
-                        closest = (zombie.node.position, d)
-                    }
+                if let index = pickTarget(for: tower, spec: spec, in: zombies.zombies) {
+                    aim(tower, at: zombies.zombies[index].node.position)
                 }
-                if let target = closest { aim(tower, at: target.position) }
             }
             let timer = (fireTimers[key] ?? 0) + deltaTime
             guard timer >= spec.fireInterval else {
@@ -270,7 +388,7 @@ final class TowerManager {
                     let d = hypot(all[i].node.position.x - tower.node.position.x,
                                   all[i].node.position.y - tower.node.position.y)
                     if d <= spec.range {
-                        zombies.slow(at: i, duration: ZombieManager.iceSlowDuration)
+                        zombies.slow(at: i, duration: spec.slowDuration, factor: spec.slowFactor)
                         DamageEffects.showImpact(.frost, at: all[i].node.position, radius: 14, in: world)
                         slowedAny = true
                     }
@@ -281,6 +399,7 @@ final class TowerManager {
                 }
                 fireTimers[key] = 0
                 showFrostPulse(at: tower.node.position, radius: spec.range, color: spec.color)
+                SoundManager.shared.play(.frost)
                 continue
             }
 
@@ -296,14 +415,7 @@ final class TowerManager {
 
             // Tesla: lightning hits the nearest zombie and jumps to the next ones.
             if spec.chainCount > 0 {
-                var first: (index: Int, distance: CGFloat)?
-                for (i, zombie) in all.enumerated() {
-                    let d = hypot(zombie.node.position.x - tower.node.position.x,
-                                  zombie.node.position.y - tower.node.position.y)
-                    if d <= spec.range, d < (first?.distance ?? .greatestFiniteMagnitude) {
-                        first = (i, d)
-                    }
-                }
+                let first = pickTarget(for: tower, spec: spec, in: all).map { (index: $0, distance: CGFloat(0)) }
                 guard let start = first else {
                     fireTimers[key] = spec.fireInterval
                     continue
@@ -326,6 +438,7 @@ final class TowerManager {
 
                 let points = chain.map { all[$0].node.position }
                 showLightning(through: [tower.node.position] + points)
+                SoundManager.shared.play(.tesla)
                 for p in points {
                     DamageEffects.showImpact(spec.damageType, at: p, radius: 0, in: world)
                 }
@@ -336,20 +449,29 @@ final class TowerManager {
                 continue
             }
 
-            var nearest: (index: Int, distance: CGFloat)?
-            for (i, zombie) in all.enumerated() {
-                let d = hypot(zombie.node.position.x - tower.node.position.x,
-                              zombie.node.position.y - tower.node.position.y)
-                if d <= spec.range, d < (nearest?.distance ?? .greatestFiniteMagnitude) {
-                    nearest = (i, d)
-                }
-            }
+            let nearest = pickTarget(for: tower, spec: spec, in: all).map { (index: $0, distance: CGFloat(0)) }
             guard let target = nearest else {
                 fireTimers[key] = spec.fireInterval // ready; waits for a target
                 continue
             }
             fireTimers[key] = 0
-            projectiles.fire(from: tower.node.position, at: all[target.index], spec: spec)
+            if tower.type == .sniper {
+                // The sniper never misses: the shot lands instantly on the target it picked.
+                let origin = tower.node.position
+                let hitPoint = all[target.index].node.position
+                let angle = atan2(hitPoint.y - origin.y, hitPoint.x - origin.x)
+                DamageEffects.showMuzzle(spec.damageType, at: origin, angle: angle, speed: spec.speed, in: world)
+                DamageEffects.streak(from: origin, to: hitPoint, color: .white, width: 1.5, duration: 0.12, in: world)
+                DamageEffects.showImpact(spec.damageType, at: hitPoint, radius: 0, in: world)
+                zombies.applyDamage(at: target.index, damage: spec.damage, type: spec.damageType)
+            } else {
+                projectiles.fire(from: tower.node.position, at: all[target.index], spec: spec)
+            }
+            switch tower.type {
+            case .flamethrower: SoundManager.shared.play(.flame)
+            case .sniper, .grenadier: SoundManager.shared.play(.heavyShot)
+            default: SoundManager.shared.play(.shot)
+            }
             if !tower.type.turnsToAim { aimDirections[key] = CGVector(dx: 0, dy: 1) }
             recoil(tower)
         }
@@ -428,8 +550,7 @@ final class TowerManager {
         guard wires.filter({ $0.owner == owner }).count < TowerManager.wiresPerTower else { return false }
 
         var best: (point: CGPoint, angle: CGFloat)?
-        let points = path.waypoints
-        guard points.count >= 2 else { return false }
+        for points in path.lanes where points.count >= 2 {
         for i in 0..<(points.count - 1) {
             let a = points[i]
             let b = points[i + 1]
@@ -443,6 +564,7 @@ final class TowerManager {
                 guard !wires.contains(where: { hypot(p.x - $0.position.x, p.y - $0.position.y) < TowerManager.wireSpacing }) else { continue }
                 best = (p, atan2(b.y - a.y, b.x - a.x)) // later points win = further along the route
             }
+        }
         }
         guard let spot = best else { return false }
 

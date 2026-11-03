@@ -84,7 +84,8 @@ final class ProjectileSystem {
 
     func fire(from origin: CGPoint, at zombie: ZombieManager.Zombie, spec: ProjectileSpec) {
         // Aim where the zombie will be when the shot arrives (first-order lead).
-        let waypoints = path.waypoints
+        let lanes = path.lanes
+        let waypoints = lanes.isEmpty ? [] : lanes[min(zombie.lane, lanes.count - 1)]
         let pos = zombie.node.position
         var aim = pos
         if zombie.nextWaypointIndex < waypoints.count {
@@ -106,7 +107,10 @@ final class ProjectileSystem {
         let angle = atan2(ay, ax)
         let node = makeNode(spec, angle: angle)
         node.position = origin
-        node.addChild(DebugOverlay.makeCircle(radius: spec.radius, color: .red, name: "hitboxDebug"))
+        // Hitbox outline only while the debug overlay is on (a hidden shape per shot still costs time).
+        if DebugOverlay.showHitboxes {
+            node.addChild(DebugOverlay.makeCircle(radius: spec.radius, color: .red, name: "hitboxDebug"))
+        }
         world.addChild(node)
 
         // Effects that make each shot read as what it is.

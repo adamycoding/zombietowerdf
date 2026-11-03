@@ -21,7 +21,9 @@ final class GameScene: SKScene {
     // GameScene only wires these together and handles input/UI. The rules
     // live in the managers (Map/, Zombies/, Towers/, Combat/).
 
-    private lazy var path = GamePath(world: worldNode)
+    /// Which map this game is played on (set before the scene is shown).
+    var map: MapDefinition = .meadowRun
+    private lazy var path = GamePath(world: worldNode, map: map)
     private lazy var zombieManager = ZombieManager(world: worldNode, path: path)
     private lazy var projectileSystem = ProjectileSystem(world: worldNode, zombies: zombieManager, path: path)
     private lazy var towerManager = TowerManager(world: worldNode, path: path,
@@ -57,14 +59,25 @@ final class GameScene: SKScene {
 
     private var lastPanelRefreshTime: TimeInterval = 0
     private let panelRefreshInterval: TimeInterval = 0.25
+    private var priorityButton: SKSpriteNode?
     private var upgradeButton: SKSpriteNode?   // MH2D-17: only while a placed tower is selected
-    private let selectionLabel = SKLabelNode(fontNamed: "AvenirNext-Medium")
-    private let waveLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
-    private let baseHealthLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
-    private let moneyLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold") // MH2D-69 HUD currency
+    private let selectionLabel = OutlinedLabel(fontNamed: "AvenirNext-Medium")
+    private let waveLabel = OutlinedLabel(fontNamed: "AvenirNext-DemiBold")
+    private let baseHealthLabel = OutlinedLabel(fontNamed: "AvenirNext-DemiBold")
+    private let moneyLabel = OutlinedLabel(fontNamed: "AvenirNext-DemiBold") // MH2D-69 HUD currency
     private let baseHealth = BaseHealth() // MH2D-56 / MH2D-126
     private var isGameOver = false          // MH2D-57
     private var gameOverOverlay: GameOverOverlay?   // MH2D-81
+    private let pauseButton = SKShapeNode(rectOf: CGSize(width: 40, height: 32), cornerRadius: 8)
+    /// Fast-forward button: toggles 1x <-> 1.5x (like Bloons TD).
+    private let speedButton = SKShapeNode(rectOf: CGSize(width: 52, height: 32), cornerRadius: 8)
+    private let speedLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
+    private var gameSpeed: Double = 1
+    private var pauseOverlay: PauseOverlay?
+    private var isPauseMenuUp: Bool { pauseOverlay != nil }
+    private var isWinScreenUp = false               // all waves cleared; waiting for Continue / Main Menu
+    private var victoryOverlay: VictoryOverlay?
+    private var victoryShownAt: TimeInterval?
     private var gameOverShownAt: TimeInterval?      // MH2D-82: ignore taps for a moment
     private static let gameOverTapDelay: TimeInterval = 0.6
     /// MH2D-82: set by GameViewController. Retry builds a fresh scene; the
@@ -104,7 +117,7 @@ final class GameScene: SKScene {
 
         // Scaffolding: background, scaling, coordinate origin.
         scaleMode = .resizeFill
-        backgroundColor = SKColor(red: 0.39, green: 0.49, blue: 0.25, alpha: 1)
+        backgroundColor = map.theme.ground
         anchorPoint = CGPoint(x: 0, y: 0) // origin at bottom-left; simplest for tile/grid math
 
         guard worldNode.parent == nil else {
@@ -163,11 +176,13 @@ final class GameScene: SKScene {
         // MH2D-53: kills pay the player.
         zombieManager.onZombieKilled = { [weak self] reward in
             self?.wallet.add(reward)
+            SoundManager.shared.play(.kill)
         }
         
         // MH2D-56: a zombie that reaches the end costs the base 1 health.
         zombieManager.onZombieReachedBase = { [weak self] in
             self?.baseHealth.damage(1)
+            SoundManager.shared.play(.baseHit)
         }
         baseHealth.onChange = { [weak self] health in
             self?.baseHealthLabel.text = "♥ \(health)"
@@ -177,9 +192,13 @@ final class GameScene: SKScene {
             self?.triggerGameOver()
         }
 
+        zombieManager.onAllWavesCompleted = { [weak self] in
+            self?.showVictory()
+        }
         zombieManager.onWaveCompleted = { [weak self] _ in
             self?.runStats.recordWaveSurvived()
             self?.wallet.add(50)
+            SoundManager.shared.play(.wave)
         }
 
         // The green debug stats bar is off. Call setUpDebugStats(in: view) here to bring it back.
@@ -200,7 +219,7 @@ final class GameScene: SKScene {
         selectionLabel.fontColor = .white
         selectionLabel.horizontalAlignmentMode = .left
         selectionLabel.zPosition = Layer.hud.rawValue
-        addChild(selectionLabel)
+        // The bottom-left hint text is no longer shown (the label is kept but not added to the scene).
 
         placementPreview.zPosition = Layer.effects.rawValue
         placementPreview.alpha = 0.65
@@ -230,6 +249,7 @@ final class GameScene: SKScene {
         cancelButton = nil
         sellButton = nil
         upgradeButton = nil
+        priorityButton = nil
         lastSafeArea = view?.safeAreaInsets ?? .zero
         
         // HUD: wave and money in the top-left corner, base health in the top-right corner of the map.
@@ -259,13 +279,41 @@ final class GameScene: SKScene {
         towerPanel.size = CGSize(width: panelWidth, height: size.height)
 
         baseHealthLabel.position = CGPoint(x: panelLeftEdge - 12, y: hudTop - 12)
+        pauseButton.position = CGPoint(x: panelLeftEdge - 110, y: hudTop - 24)
+        if pauseButton.parent == nil {
+            pauseButton.fillColor = SKColor(white: 0, alpha: 0.45)
+            pauseButton.strokeColor = .white
+            pauseButton.lineWidth = 2
+            pauseButton.zPosition = Layer.hud.rawValue
+            for x: CGFloat in [-5, 5] {
+                let bar = SKShapeNode(rectOf: CGSize(width: 5, height: 14), cornerRadius: 1)
+                bar.fillColor = .white
+                bar.strokeColor = .clear
+                bar.position = CGPoint(x: x, y: 0)
+                pauseButton.addChild(bar)
+            }
+            addChild(pauseButton)
+        }
+        speedButton.position = CGPoint(x: panelLeftEdge - 168, y: hudTop - 24)
+        if speedButton.parent == nil {
+            speedButton.strokeColor = .white
+            speedButton.lineWidth = 2
+            speedButton.zPosition = Layer.hud.rawValue
+            speedLabel.fontSize = 16
+            speedLabel.fontColor = .white
+            speedLabel.verticalAlignmentMode = .center
+            speedLabel.horizontalAlignmentMode = .center
+            speedButton.addChild(speedLabel)
+            addChild(speedButton)
+            updateSpeedButton()
+        }
 
         // Tell the tower system where towers may be placed (left of the panel).
         towerManager.playfield = TowerManager.Playfield(
-            minX: lastSafeArea.left + 24,
-            maxX: panelLeftEdge - 24,
-            minY: lastSafeArea.bottom + 40,
-            maxY: size.height - lastSafeArea.top - 24
+            minX: lastSafeArea.left,   // the notch side keeps its safe area
+            maxX: panelLeftEdge,
+            minY: 0,
+            maxY: size.height
         )
 
         let heading = makeLabel("Towers", size: 16)
@@ -439,6 +487,19 @@ final class GameScene: SKScene {
         }
         y -= 4
 
+        // Target priority: tap to cycle Close / Far / Front / Back.
+        // (Ice pulses on everything in range and Barbed Wire lays wire, so neither picks a target.)
+        if tower.type != .ice && tower.type != .trapper {
+            let priorityHeight: CGFloat = 30
+            let priorityButton = SKSpriteNode(color: UIColor(white: 0.3, alpha: 1),
+                                              size: CGSize(width: width - 16, height: priorityHeight))
+            priorityButton.position = CGPoint(x: centerX, y: y - priorityHeight / 2)
+            priorityButton.addChild(makeLabel("Target: \(tower.priority.rawValue)", size: 12))
+            towerPanel.addChild(priorityButton)
+            self.priorityButton = priorityButton
+            y -= priorityHeight + 8
+        }
+
         // Upgrade button (or MAX).
         let buttonHeight: CGFloat = 40
         if let cost = towerManager.upgradeCost {
@@ -476,6 +537,7 @@ final class GameScene: SKScene {
         guard let cost = towerManager.upgradeCost, wallet.canAfford(cost) else { return }
         guard towerManager.upgradeSelected() else { return }
         wallet.spend(cost)
+        SoundManager.shared.play(.upgrade)
         refreshTowerPanel()         // show the new tier right away
     }
 
@@ -490,8 +552,8 @@ final class GameScene: SKScene {
             top: size.height - lastSafeArea.top - 60
         )
         // If the route moved, put existing zombies at the same spot along it.
-        if let oldWaypoints = path.rebuild(in: bounds) {
-            zombieManager.remapProgress(from: oldWaypoints)
+        if let oldLanes = path.rebuild(in: bounds) {
+            zombieManager.remapProgress(from: oldLanes)
         }
     }
 
@@ -522,7 +584,9 @@ final class GameScene: SKScene {
         }
         placementPreview.isHidden = false
         // Range radius of the tower being dragged.
-        placementPreview.addChild(TowerVisuals.makeRangeRing(radius: tower.spec.range))
+        if !tower.spec.isGlobalRange { // global-range towers (Sniper) show no circle
+            placementPreview.addChild(TowerVisuals.makeRangeRing(radius: tower.spec.range))
+        }
         // No ring: the tower itself turns red when it can't go here.
         previewOutline = nil
         let previewIcon = tower.makeIcon(enabled: true)
@@ -542,6 +606,17 @@ final class GameScene: SKScene {
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = touches.first else { return }
+        // After winning, the only touches that matter are the win screen buttons.
+        if isWinScreenUp {
+            guard let shownAt = victoryShownAt,
+                  touch.timestamp - shownAt >= GameScene.gameOverTapDelay else { return }
+            switch victoryOverlay?.action(at: touch.location(in: self)) {
+            case .continuePlaying: continueAfterVictory()
+            case .mainMenu: onMainMenuRequested?()
+            case nil: break
+            }
+            return
+        }
         // MH2D-57/82: after losing, the only touches that matter are the Game Over buttons.
         if isGameOver {
             // Don't let a tap that was already on its way when the game ended hit Retry.
@@ -554,6 +629,35 @@ final class GameScene: SKScene {
             }
             return
         }
+        // Pause menu: only its buttons respond.
+        if isPauseMenuUp {
+            switch pauseOverlay?.action(at: touch.location(in: self)) {
+            case .resume: setPaused(false)
+            case .restart: onRetryRequested?()
+            case .mainMenu: onMainMenuRequested?()
+            case .toggleSound:
+                SoundManager.shared.soundOn.toggle()
+                SoundManager.shared.play(.tap)
+                pauseOverlay?.refreshToggles()
+            case .toggleMusic:
+                SoundManager.shared.musicOn.toggle()
+                pauseOverlay?.refreshToggles()
+            case nil: break
+            }
+            return
+        }
+        if speedButton.frame.insetBy(dx: -8, dy: -8).contains(touch.location(in: self)) {
+            gameSpeed = gameSpeed == 1 ? 1.5 : 1
+            worldNode.speed = CGFloat(gameSpeed) // animations keep up with the faster game
+            SoundManager.shared.play(.tap)
+            updateSpeedButton()
+            return
+        }
+        if pauseButton.frame.insetBy(dx: -8, dy: -8).contains(touch.location(in: self)) {
+            SoundManager.shared.play(.tap)
+            setPaused(true)
+            return
+        }
         let point = touch.location(in: self)
         let panelPoint = touch.location(in: towerPanel)
         isDraggingTower = false
@@ -562,6 +666,12 @@ final class GameScene: SKScene {
 
         // Panel touches must not fall through to the map.
         if point.x >= towerPanel.position.x {
+            if let priority = priorityButton, priority.contains(panelPoint) {
+                towerManager.cycleSelectedPriority()
+                SoundManager.shared.play(.tap)
+                refreshTowerPanel()
+                return
+            }
             if let sell = sellButton, sell.contains(panelPoint) {
                 touchStartedOnSell = true
                 return
@@ -627,7 +737,7 @@ final class GameScene: SKScene {
     /// Release: place the tower if the finger is over the map and the spot
     /// is valid; otherwise cancel the drag.
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard !isGameOver else { return }
+        guard !isGameOver, !isWinScreenUp, !isPauseMenuUp else { return }
         guard let touch = touches.first else { return }
         panelTouchStart = nil
         pendingCard = nil
@@ -698,7 +808,7 @@ final class GameScene: SKScene {
     }
 
     private func updatePreviewValidity() {
-        let valid = towerManager.isValidPlacement(at: placementPreview.position)
+        let valid = towerManager.isValidPlacement(at: placementPreview.position, type: towerSelection.selectedTower)
         guard let icon = placementPreview.childNode(withName: "previewIcon") else { return }
         for piece in allShapes(in: icon) {
             // Remember the tower's real colors the first time so they can be restored.
@@ -726,6 +836,7 @@ final class GameScene: SKScene {
 
         // Pay, leave placement mode, and refresh the panel (money, card states).
         wallet.spend(type.cost)
+        SoundManager.shared.play(.place)
         towerSelection.cancel()
         refreshTowerPanel()
     }
@@ -734,6 +845,7 @@ final class GameScene: SKScene {
     private func sellSelectedTower() {
         guard let refund = towerManager.sellSelected() else { return }
         wallet.add(refund)
+        SoundManager.shared.play(.sell)
         refreshTowerPanel()         // back to the tower cards right away
     }
 
@@ -773,7 +885,7 @@ final class GameScene: SKScene {
         // simulating hundreds of ticks at once.
         frameDelta = min(frameDelta, 0.25)
 
-        accumulator += frameDelta
+        accumulator += frameDelta * gameSpeed
 
         // Run gameplay logic at a fixed rate, possibly multiple times per
         // rendered frame (or zero times, if the device is rendering faster
@@ -787,7 +899,7 @@ final class GameScene: SKScene {
     /// One gameplay step. Order matters: spawn → move → towers fire →
     /// projectiles move and hit.
     private func tick(deltaTime: TimeInterval) {
-        guard !isGameOver else { return } // MH2D-57: freeze everything on Game Over
+        guard !isGameOver, !isWinScreenUp, !isPauseMenuUp else { return } // MH2D-57: freeze everything on Game Over (and on the win screen)
         // If the route isn't built yet (first layout pass had a degenerate
         // size), don't spawn and don't bank time — otherwise a burst of
         // zombies appears all at once when the path finally exists.
@@ -806,7 +918,50 @@ final class GameScene: SKScene {
         tickCount += 1
         updateDebugStats()
         zombieManager.checkWaveCompletion()
-        waveLabel.text = "Wave \(zombieManager.currentWave)/\(zombieManager.totalWaves)"
+        updateWaveLabel()
+    }
+
+    /// "Wave 12/40", or just "Wave 41" once the player has continued past the last wave.
+    private func updateWaveLabel() {
+        if zombieManager.currentWave > zombieManager.totalWaves {
+            waveLabel.text = "Wave \(zombieManager.currentWave)"
+        } else {
+            waveLabel.text = "Wave \(zombieManager.currentWave)/\(zombieManager.totalWaves)"
+        }
+    }
+
+    // MARK: - Win screen
+
+    /// The last wave has been cleared: freeze the game and show the win screen.
+    private func showVictory() {
+        guard !isGameOver, !isWinScreenUp else { return }
+        isWinScreenUp = true
+        SoundManager.shared.play(.win)
+        // Drop any tower the player is dragging so it can't build or charge.
+        if isDraggingTower {
+            isDraggingTower = false
+            towerSelection.cancel()
+            refreshTowerPanel()
+        }
+        placementPreview.isHidden = true
+
+        let overlay = VictoryOverlay(size: size,
+                                     totalWaves: zombieManager.totalWaves,
+                                     livesLeft: baseHealth.current,
+                                     showsMainMenu: onMainMenuRequested != nil)
+        victoryOverlay = overlay
+        victoryShownAt = ProcessInfo.processInfo.systemUptime
+        addChild(overlay)
+    }
+
+    /// Win screen -> Continue: keep playing; the waves keep coming.
+    private func continueAfterVictory() {
+        victoryOverlay?.removeFromParent()
+        victoryOverlay = nil
+        isWinScreenUp = false
+        zombieManager.continueAfterVictory()
+        updateWaveLabel()
+        refreshTowerPanel() // also resets the drag preview
     }
 
     // MARK: - Game Over (MH2D-57)
@@ -815,6 +970,7 @@ final class GameScene: SKScene {
     private func triggerGameOver() {
         guard !isGameOver else { return }
         isGameOver = true
+        SoundManager.shared.play(.gameOver)
         // Drop any tower the player is dragging so releasing it can't build or charge.
         if isDraggingTower {
             isDraggingTower = false
@@ -832,9 +988,40 @@ final class GameScene: SKScene {
         addChild(overlay)
     }
 
+    /// Pause button: freezes the game (and the zombie animations) and shows the pause menu.
+    private func updateSpeedButton() {
+        speedLabel.text = gameSpeed == 1 ? "1×" : "1.5×"
+        speedButton.fillColor = gameSpeed == 1 ? SKColor(white: 0, alpha: 0.45)
+                                               : SKColor.systemOrange.withAlphaComponent(0.85)
+    }
+
+    private func setPaused(_ paused: Bool) {
+        if paused {
+            guard pauseOverlay == nil else { return }
+            // Drop anything half-done (a tower being dragged) so it can't be placed while paused.
+            touchesCancelled([], with: nil)
+            let overlay = PauseOverlay(size: size)
+            addChild(overlay)
+            pauseOverlay = overlay
+            worldNode.isPaused = true
+        } else {
+            pauseOverlay?.removeFromParent()
+            pauseOverlay = nil
+            worldNode.isPaused = false
+            accumulator = 0
+        }
+    }
+
     override func didChangeSize(_ oldSize: CGSize) {
         super.didChangeSize(oldSize)
         refreshTowerPanel()
+        // Rebuild the pause menu for the new screen size (iPad, rotation, split view).
+        if pauseOverlay != nil {
+            pauseOverlay?.removeFromParent()
+            let overlay = PauseOverlay(size: size)
+            addChild(overlay)
+            pauseOverlay = overlay
+        }
     }
 
     // MARK: - MH2D-37: App lifecycle (pause/resume/background)

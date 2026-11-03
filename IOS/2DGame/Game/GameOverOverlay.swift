@@ -29,7 +29,7 @@ final class GameOverOverlay: SKNode {
             : nil
         super.init()
         name = GameOverOverlay.nodeName
-        zPosition = Layer.hud.rawValue + 10
+        zPosition = 1000 // above every tower part (tower pieces reach z 120+)
 
         let dim = SKSpriteNode(color: UIColor(white: 0, alpha: 0.7), size: size)
         dim.anchorPoint = .zero
