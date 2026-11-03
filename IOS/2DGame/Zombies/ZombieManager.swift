@@ -14,6 +14,8 @@ final class ZombieManager {
 
     struct Zombie {
         let node: SKShapeNode
+        var type: ZombieType = .normal
+        var movementSpeed: CGFloat = 60
         var nextWaypointIndex: Int = 1
         var hurtbox = Hurtbox(radius: ZombieManager.radius) // MH2D-45
         var slowTimer: TimeInterval = 0 // > 0 while slowed by an ice tower
@@ -54,28 +56,7 @@ final class ZombieManager {
     private let world: SKNode
     private let path: GamePath
     private var spawnTimer: TimeInterval = 0
-    private let waves: [WaveDefinition] = [
-        WaveDefinition(
-            zombieTypes: Array(repeating: .normal, count: 5),
-            spawnInterval: 1.5
-        ),
-        WaveDefinition(
-            zombieTypes: Array(repeating: .normal, count: 8),
-            spawnInterval: 1.2
-        ),
-        WaveDefinition(
-            zombieTypes: Array(repeating: .normal, count: 10),
-            spawnInterval: 1.0
-        ),
-        WaveDefinition(
-            zombieTypes: Array(repeating: .normal, count: 12),
-            spawnInterval: 0.9
-        ),
-        WaveDefinition(
-            zombieTypes: Array(repeating: .normal, count: 15),
-            spawnInterval: 0.8
-        )
-    ]
+    private let waves: [WaveDefinition]
 
     private var waveDefinition: WaveDefinition {
         waves[currentWave - 1]
@@ -91,6 +72,30 @@ final class ZombieManager {
     init(world: SKNode, path: GamePath) {
         self.world = world
         self.path = path
+
+        guard let url = Bundle.main.url(
+            forResource: "Rounds",
+            withExtension: "json"
+        ) else {
+            fatalError("Rounds.json is missing from the app target.")
+        }
+
+        do {
+            let data = try Data(contentsOf: url)
+
+            let configuration = try JSONDecoder().decode(
+                RoundConfiguration.self,
+                from: data
+            )
+
+            guard !configuration.rounds.isEmpty else {
+                fatalError("Rounds.json must contain at least one round.")
+            }
+
+            self.waves = configuration.rounds
+        } catch {
+            fatalError("Could not load Rounds.json: \(error)")
+        }
     }
 
     // MARK: Spawning
@@ -115,114 +120,71 @@ final class ZombieManager {
         }
     }
     
-    private func makeZombieNode() -> SKShapeNode {
-        // The main shape is now the head.
-        // Existing damage and ice effects still change its color.
-        let headPath = CGPath(
-            ellipseIn: CGRect(x: -7, y: 1, width: 14, height: 14),
-            transform: nil
-        )
-        let zombie = SKShapeNode(path: headPath)
+    private func makeZombieNode(type: ZombieType) -> SKShapeNode {
+        // Keep the existing container so combat code still works.
+        let zombie = SKShapeNode()
 
-        // Add a body part to the zombie.
-        func addPart(
-            width: CGFloat,
-            height: CGFloat,
-            x: CGFloat,
-            y: CGFloat,
-            color: SKColor
-        ) -> SKShapeNode {
-            let part = SKShapeNode(
-                rectOf: CGSize(width: width, height: height),
-                cornerRadius: 2
-            )
-            part.position = CGPoint(x: x, y: y)
-            part.fillColor = color
-            part.strokeColor = SKColor(white: 0.15, alpha: 1)
-            part.lineWidth = 1
-            part.zPosition = 1
-            zombie.addChild(part)
-            return part
+        let texture = SKTexture(
+            imageNamed: "zombie_\(type.rawValue)"
+        )
+        texture.filteringMode = .linear
+
+        let sprite = SKSpriteNode(texture: texture)
+        sprite.name = "art"
+
+        // Preserve the image's proportions.
+        let height: CGFloat = type == .tank ? 52 : 40
+        let textureSize = texture.size()
+
+        sprite.size = CGSize(
+            width: height * textureSize.width / max(textureSize.height, 1),
+            height: height
+        )
+
+        zombie.addChild(sprite)
+
+        let stepDuration: TimeInterval
+
+        switch type {
+        case .normal:
+            stepDuration = 0.22
+        case .runner:
+            stepDuration = 0.12
+        case .armored:
+            stepDuration = 0.30
+        case .tank:
+            stepDuration = 0.40
         }
 
-        // Shadow beneath the feet.
-        let shadow = SKShapeNode(
-            ellipseOf: CGSize(width: 20, height: 6)
-        )
-        shadow.position = CGPoint(x: 0, y: -12)
-        shadow.fillColor = SKColor.black.withAlphaComponent(0.2)
-        shadow.strokeColor = .clear
-        shadow.zPosition = -1
-        zombie.addChild(shadow)
-
-        // Two walking legs.
-        for side: CGFloat in [-1, 1] {
-            let leg = addPart(
-                width: 5, height: 9,
-                x: side * 4, y: -8,
-                color: .darkGray
-            )
-
-            let step = SKAction.sequence([
-                .moveBy(x: 0, y: side * 2, duration: 0.22),
-                .moveBy(x: 0, y: -side * 2, duration: 0.22)
+        // A simple walking bob using the single-pose artwork.
+        let walk = SKAction.sequence([
+            .group([
+                .moveBy(x: 0, y: 1.5, duration: stepDuration),
+                .rotate(toAngle: 0.04, duration: stepDuration)
+            ]),
+            .group([
+                .moveBy(x: 0, y: -1.5, duration: stepDuration),
+                .rotate(toAngle: -0.04, duration: stepDuration)
             ])
-            leg.run(.repeatForever(step))
-        }
+        ])
 
-        // Brown shirt.
-        _ = addPart(
-            width: 12, height: 10,
-            x: 0, y: -1,
-            color: SKColor(
-                red: 0.39, green: 0.36, blue: 0.27, alpha: 1
-            )
-        )
-
-        // Outstretched arms.
-        for side: CGFloat in [-1, 1] {
-            let arm = addPart(
-                width: 4, height: 9,
-                x: side * 8, y: 0,
-                color: SKColor(
-                    red: 0.57, green: 0.70, blue: 0.37, alpha: 1
-                )
-            )
-            arm.zRotation = side * 0.4
-        }
-
-        // Eyes and pupils.
-        for x: CGFloat in [-3, 3] {
-            _ = addPart(
-                width: 4, height: 4,
-                x: x, y: 10,
-                color: .white
-            )
-            let pupil = addPart(
-                width: 1.5, height: 2,
-                x: x, y: 10,
-                color: .black
-            )
-            pupil.zPosition = 2
-        }
-
-        // Mouth.
-        _ = addPart(
-            width: 5, height: 2,
-            x: 0, y: 5,
-            color: .darkGray
-        )
+        sprite.run(.repeatForever(walk), withKey: "walk")
 
         return zombie
     }
 
     private func spawn(type: ZombieType) {        guard let startPoint = path.waypoints.first else { return }
 
-        let zombie = makeZombieNode()
-        zombie.name = "zombie"
+        let zombie = makeZombieNode(type: type)
         switch type {
         case .normal:
             zombie.fillColor = .systemGreen
+        case .runner:
+            zombie.fillColor = .systemOrange
+        case .armored:
+            zombie.fillColor = .systemGray
+        case .tank:
+            zombie.fillColor = .systemPurple
         }
         zombie.strokeColor = .black
         zombie.lineWidth = 2
@@ -235,7 +197,10 @@ final class ZombieManager {
         let width = ZombieManager.healthBarWidth
         let barBack = SKSpriteNode(color: .systemRed, size: CGSize(width: width, height: 3))
         barBack.name = "healthBack"
-        barBack.position = CGPoint(x: 0, y: ZombieManager.radius + 6)
+        barBack.position = CGPoint(
+            x: 0,
+            y: type == .tank ? 32 : 26
+        )
         barBack.zPosition = 4
         let barFill = SKSpriteNode(color: .systemGreen, size: CGSize(width: width, height: 3))
         barFill.name = "healthFill"
@@ -246,7 +211,18 @@ final class ZombieManager {
         zombie.addChild(barBack)
 
         world.addChild(zombie)
-        zombies.append(Zombie(node: zombie))
+        let stats = type.stats
+
+        zombies.append(
+            Zombie(
+                node: zombie,
+                type: type,
+                movementSpeed: CGFloat(stats.speed),
+                maxHealth: stats.health,
+                health: stats.health,
+                reward: stats.reward
+            )
+        )
     }
 
     // MARK: Movement
@@ -257,6 +233,10 @@ final class ZombieManager {
         // the indexes of zombies we still need to update.
         for index in zombies.indices.reversed() {
             let zombie = zombies[index].node
+            if let sprite = zombie.childNode(withName: "art") as? SKSpriteNode {
+                sprite.color = .systemTeal
+                sprite.colorBlendFactor = zombies[index].slowTimer > 0 ? 0.5 : 0
+            }
             // Ice tower slow: zombies crawl at iceSlowFactor of normal speed.
             var speedMultiplier: CGFloat = 1
             if zombies[index].slowTimer > 0 {
@@ -264,9 +244,19 @@ final class ZombieManager {
                 speedMultiplier = ZombieManager.iceSlowFactor
                 zombie.fillColor = .systemTeal
             } else {
-                zombie.fillColor = .systemGreen
+                switch zombies[index].type {
+                case .normal:
+                    zombie.fillColor = .systemGreen
+                case .runner:
+                    zombie.fillColor = .systemOrange
+                case .armored:
+                    zombie.fillColor = .systemGray
+                case .tank:
+                    zombie.fillColor = .systemPurple
+                }
             }
-            var remainingMovement = speed * speedMultiplier * CGFloat(deltaTime)
+            var remainingMovement =
+                zombies[index].movementSpeed * speedMultiplier * CGFloat(deltaTime)
 
             while remainingMovement > 0 {
                 let waypointIndex = zombies[index].nextWaypointIndex
@@ -412,12 +402,19 @@ final class ZombieManager {
 
     /// Brief white flash so each hit is visible.
     private func flashHit(_ node: SKShapeNode) {
-        node.removeAction(forKey: "hitFlash")
-        node.run(.sequence([
-            .run { node.strokeColor = .white },
-            .wait(forDuration: 0.08),
-            .run { node.strokeColor = .black }
-        ]), withKey: "hitFlash")
+        guard let sprite = node.childNode(withName: "art") as? SKSpriteNode else {
+            return
+        }
+
+        sprite.removeAction(forKey: "hitFlash")
+        sprite.alpha = 1
+
+        let flash = SKAction.sequence([
+            .fadeAlpha(to: 0.35, duration: 0.04),
+            .fadeAlpha(to: 1, duration: 0.04)
+        ])
+
+        sprite.run(flash, withKey: "hitFlash")
     }
     
     // Checks if wave has fully spawned and if there is no zombies left.
@@ -439,13 +436,18 @@ final class ZombieManager {
             return
         }
 
+        // Mark it first so the reward and completion event happen only once.
         hasAnnouncedWaveCompletion = true
+
         print("Wave \(currentWave) Complete")
         onWaveCompleted?(currentWave)
+    }
 
-        guard currentWave < waves.count else {
-            print("All waves complete!")
-            return
+    @discardableResult
+    func startNextWave() -> Bool {
+        guard hasAnnouncedWaveCompletion,
+              currentWave < waves.count else {
+            return false
         }
 
         currentWave += 1
@@ -454,6 +456,7 @@ final class ZombieManager {
         hasAnnouncedWaveCompletion = false
 
         print("Starting Wave \(currentWave)")
+        return true
     }
     
     

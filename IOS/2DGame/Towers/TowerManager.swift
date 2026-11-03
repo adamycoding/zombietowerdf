@@ -14,6 +14,48 @@ final class TowerManager {
     struct PlacedTower {
         let type: TowerType
         let node: SKNode
+
+        // Buying the first tier will lock this tower to one path.
+        var upgradePath: UpgradePath? = nil
+        var upgradeTier: Int = 0
+        var upgradeMoneySpent: Int = 0
+
+        var effectiveSpec: ProjectileSpec {
+            var result = type.spec
+
+            guard let path = upgradePath else {
+                return result
+            }
+
+            let definition = type.upgradeDefinition(for: path)
+
+            for tier in definition.tiers.prefix(upgradeTier) {
+                result.damage += tier.damageIncrease
+                result.range += CGFloat(tier.rangeIncrease)
+                result.fireInterval -= tier.fireIntervalReduction
+            }
+
+            // Keep future tuning from creating a zero/negative interval.
+            result.fireInterval = max(0.1, result.fireInterval)
+
+            return result
+        }
+
+        var effectiveSlowDuration: TimeInterval {
+            var duration = ZombieManager.iceSlowDuration
+
+            guard let path = upgradePath else {
+                return duration
+            }
+
+            let definition = type.upgradeDefinition(for: path)
+
+            for tier in definition.tiers.prefix(upgradeTier) {
+                duration += tier.slowDurationIncrease
+            }
+
+            return duration
+        }
     }
 
     /// The area of the map where towers may be placed.
@@ -127,7 +169,11 @@ final class TowerManager {
             ring.lineWidth = 3
             placed[hit].node.addChild(ring)
             // Show how far this tower can shoot while it's selected.
-            placed[hit].node.addChild(TowerVisuals.makeRangeRing(radius: placed[hit].type.spec.range))
+            placed[hit].node.addChild(
+                TowerVisuals.makeRangeRing(
+                    radius: placed[hit].effectiveSpec.range
+                )
+            )
         }
         return true
     }
@@ -143,13 +189,81 @@ final class TowerManager {
         return sold.type
     }
 
+    // MARK: Upgrades
+
+    /// Returns the next tier's price.
+    /// nil means no tower is selected, the path is locked,
+    /// or this path is already fully upgraded.
+    func nextUpgradeCost(for path: UpgradePath) -> Int? {
+        guard let tower = selected else {
+            return nil
+        }
+
+        if let chosenPath = tower.upgradePath,
+           chosenPath != path {
+            return nil
+        }
+
+        let definition = tower.type.upgradeDefinition(for: path)
+
+        guard tower.upgradeTier < definition.tiers.count else {
+            return nil
+        }
+
+        return definition.tiers[tower.upgradeTier].cost
+    }
+
+    /// Purchases one tier for the selected tower.
+    /// The first purchase permanently chooses its path.
+    @discardableResult
+    func upgradeSelected(
+        along path: UpgradePath,
+        wallet: PlayerWallet
+    ) -> Bool {
+        guard let index = selectedIndex,
+              placed.indices.contains(index),
+              let cost = nextUpgradeCost(for: path),
+              wallet.spend(cost)
+        else {
+            return false
+        }
+
+        placed[index].upgradePath = path
+        placed[index].upgradeTier += 1
+        placed[index].upgradeMoneySpent += cost
+
+        // Redraw the selected tower's range after an upgrade.
+        let tower = placed[index]
+
+        tower.node.childNode(withName: "rangeRing")?.removeFromParent()
+
+        tower.node.addChild(
+            TowerVisuals.makeRangeRing(
+                radius: tower.effectiveSpec.range
+            )
+        )
+
+        // Keep the debug range circle consistent too.
+        tower.node.childNode(withName: "rangeDebug")?.removeFromParent()
+
+        tower.node.addChild(
+            DebugOverlay.makeCircle(
+                radius: tower.effectiveSpec.range,
+                color: UIColor.white.withAlphaComponent(0.5),
+                name: "rangeDebug"
+            )
+        )
+
+        return true
+    }
+    
     // MARK: Firing (TEMP until MH2D-9)
 
     /// TEMP test shooter: each placed tower fires at the nearest zombie in
     /// range; the ice tower pulses a slow on everything in range.
     func updateFire(deltaTime: TimeInterval) {
         for tower in placed {
-            let spec = tower.type.spec
+            let spec = tower.effectiveSpec
             let key = ObjectIdentifier(tower.node)
             let timer = (fireTimers[key] ?? 0) + deltaTime
             guard timer >= spec.fireInterval else {
@@ -166,7 +280,10 @@ final class TowerManager {
                     let d = hypot(all[i].node.position.x - tower.node.position.x,
                                   all[i].node.position.y - tower.node.position.y)
                     if d <= spec.range {
-                        zombies.slow(at: i, duration: ZombieManager.iceSlowDuration)
+                        zombies.slow(
+                            at: i,
+                            duration: tower.effectiveSlowDuration
+                        )
                         slowedAny = true
                     }
                 }

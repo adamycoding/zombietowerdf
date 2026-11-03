@@ -45,9 +45,13 @@ final class GameScene: SKScene {
     private let selectionLabel = SKLabelNode(fontNamed: "AvenirNext-Medium")
     private let waveLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
     private let baseHealthLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
+    private let moneyLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold") // MH2D-69 HUD currency
     private let baseHealth = BaseHealth() // MH2D-56 / MH2D-126
     private var isGameOver = false          // MH2D-57
-    private var gameOverOverlay: GameOverOverlay?   // MH2D-81
+    private var gameOverOverlay: GameOverOverlay?// MH2D-81
+    private var waveCompleteOverlay: WaveCompleteOverlay?
+    private var towerUpgradePanel: TowerUpgradePanel?
+    private let waveCompletionBonus = 50
     private var gameOverShownAt: TimeInterval?      // MH2D-82: ignore taps for a moment
     private static let gameOverTapDelay: TimeInterval = 0.6
     /// MH2D-82: set by GameViewController. Retry builds a fresh scene; the
@@ -82,10 +86,10 @@ final class GameScene: SKScene {
         addChild(worldNode)
         waveLabel.fontSize = 20
         waveLabel.fontColor = .white
-        waveLabel.horizontalAlignmentMode = .right
+        waveLabel.horizontalAlignmentMode = .left
         waveLabel.verticalAlignmentMode = .top
         waveLabel.zPosition = Layer.hud.rawValue
-        waveLabel.text = "Wave \(zombieManager.currentWave)"
+        waveLabel.text = "Wave \(zombieManager.currentWave)/\(zombieManager.totalWaves)"
         addChild(waveLabel)
         
         baseHealthLabel.fontSize = 20
@@ -95,6 +99,15 @@ final class GameScene: SKScene {
         baseHealthLabel.zPosition = Layer.hud.rawValue
         baseHealthLabel.text = "♥ \(baseHealth.current)"
         addChild(baseHealthLabel)
+
+        // MH2D-69: currency in the HUD (below wave and base health).
+        moneyLabel.fontSize = 20
+        moneyLabel.fontColor = .systemYellow
+        moneyLabel.horizontalAlignmentMode = .left
+        moneyLabel.verticalAlignmentMode = .top
+        moneyLabel.zPosition = Layer.hud.rawValue
+        moneyLabel.text = "$\(wallet.money)"
+        addChild(moneyLabel)
         
         
         setUpTowerPanel()
@@ -103,6 +116,7 @@ final class GameScene: SKScene {
         wallet.onChange = { [weak self] money in
             guard let self else { return }
             self.towerSelection.updateMoney(money)
+            self.moneyLabel.text = "$\(money)" // MH2D-70: HUD follows the wallet
             self.refreshTowerPanel()
         }
         // MH2D-53: kills pay the player.
@@ -122,9 +136,23 @@ final class GameScene: SKScene {
             self?.triggerGameOver()
         }
 
-        zombieManager.onWaveCompleted = { [weak self] _ in
-            self?.runStats.recordWaveSurvived()
-            self?.wallet.add(50)
+        zombieManager.onWaveCompleted = { [weak self] completedWave in
+            guard let self else { return }
+
+            self.runStats.recordWaveSurvived()
+
+            // Award the bonus before showing the screen.
+            self.wallet.add(self.waveCompletionBonus)
+
+            let overlay = WaveCompleteOverlay(
+                size: self.size,
+                completedWave: completedWave,
+                reward: self.waveCompletionBonus,
+                hasNextWave: completedWave < self.zombieManager.totalWaves
+            )
+
+            self.waveCompleteOverlay = overlay
+            self.addChild(overlay)
         }
 
         setUpDebugStats(in: view) // remove once you trust the loop; handy while building it
@@ -173,14 +201,16 @@ final class GameScene: SKScene {
         sellButton = nil
         lastSafeArea = view?.safeAreaInsets ?? .zero
         
-        waveLabel.position = CGPoint(
-            x: size.width - lastSafeArea.right - 16,
-            y: size.height - lastSafeArea.top - 16
-        )
-        
+        // HUD: wave and money top-left (under the debug line), base health top-right.
+        let hudLeft = lastSafeArea.left + 16
+        let hudTop = size.height - lastSafeArea.top
+
+        waveLabel.position = CGPoint(x: hudLeft, y: hudTop - 40)
+        moneyLabel.position = CGPoint(x: hudLeft, y: hudTop - 70)
+
         baseHealthLabel.position = CGPoint(
             x: size.width - lastSafeArea.right - 16,
-            y: waveLabel.position.y - 30
+            y: hudTop - 16
         )
 
         let left = lastSafeArea.left + 16
@@ -317,12 +347,33 @@ final class GameScene: SKScene {
         updatePreviewValidity()
     }
 
+    
+    
+    
     // MARK: - Touch handling (drag-and-drop placement)
     //
     // Press a tower card, drag onto the map, release to place. Releasing on
     // the panel or on a red (invalid) spot cancels with no money spent.
     // Sell fires when the finger lifts on the Sell button, not on touch-down.
+    
+    private func showTowerUpgradePanel() {
+        towerUpgradePanel?.removeFromParent()
+        towerUpgradePanel = nil
 
+        guard let tower = towerManager.selected else {
+            return
+        }
+
+        let panel = TowerUpgradePanel(
+            size: size,
+            tower: tower,
+            money: wallet.money
+        )
+
+        towerUpgradePanel = panel
+        addChild(panel)
+    }
+    
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = touches.first else { return }
         // MH2D-57/82: after losing, the only touches that matter are the Game Over buttons.
@@ -338,6 +389,46 @@ final class GameScene: SKScene {
             return
         }
         let point = touch.location(in: self)
+        if let panel = towerUpgradePanel {
+            switch panel.action(at: point) {
+            case .close:
+                panel.removeFromParent()
+                towerUpgradePanel = nil
+
+            case .upgrade(let path):
+                if towerManager.upgradeSelected(
+                    along: path,
+                    wallet: wallet
+                ) {
+                    refreshTowerPanel()
+                    showTowerUpgradePanel()
+                }
+
+            case nil:
+                break
+            }
+
+            return
+        }
+        if let overlay = waveCompleteOverlay {
+            if overlay.isNextWaveTapped(at: point) {
+                if zombieManager.startNextWave() {
+                    overlay.removeFromParent()
+                    waveCompleteOverlay = nil
+                }
+                return
+            }
+
+            if overlay.isManageTowersTapped(at: point) {
+                overlay.beginManagingTowers()
+                return
+            }
+
+            // Allow map and tower touches while managing between waves.
+            if !overlay.isManagingTowers {
+                return
+            }
+        }
         let panelPoint = touch.location(in: towerPanel)
         isDraggingTower = false
         touchStartedOnSell = false
@@ -361,12 +452,20 @@ final class GameScene: SKScene {
         }
 
         // Map touch: tapping a placed tower selects it, empty map deselects.
-        if towerManager.select(at: point) {
-            refreshTowerPanel()
+        towerManager.select(at: point)
+        refreshTowerPanel()
+
+        if towerManager.selected != nil {
+            showTowerUpgradePanel()
         }
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard towerUpgradePanel == nil else { return }
+        if let overlay = waveCompleteOverlay,
+           !overlay.isManagingTowers {
+            return
+        }
         guard isDraggingTower, let touch = touches.first else { return }
         movePlacementPreview(to: touch.location(in: self))
     }
@@ -374,6 +473,11 @@ final class GameScene: SKScene {
     /// Release: place the tower if the finger is over the map and the spot
     /// is valid; otherwise cancel the drag.
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard towerUpgradePanel == nil else { return }
+        if let overlay = waveCompleteOverlay,
+           !overlay.isManagingTowers {
+            return
+        }
         guard !isGameOver else { return }
         guard let touch = touches.first else { return }
 
@@ -488,6 +592,7 @@ final class GameScene: SKScene {
     /// One gameplay step. Order matters: spawn → move → towers fire →
     /// projectiles move and hit.
     private func tick(deltaTime: TimeInterval) {
+        guard towerUpgradePanel == nil else { return }
         guard !isGameOver else { return } // MH2D-57: freeze everything on Game Over
         // If the route isn't built yet (first layout pass had a degenerate
         // size), don't spawn and don't bank time — otherwise a burst of
@@ -535,6 +640,10 @@ final class GameScene: SKScene {
 
     override func didChangeSize(_ oldSize: CGSize) {
         super.didChangeSize(oldSize)
+        if towerUpgradePanel != nil {
+            showTowerUpgradePanel()
+        }
+        waveCompleteOverlay?.layout(size: size)
         refreshTowerPanel()
     }
 
