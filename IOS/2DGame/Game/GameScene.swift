@@ -45,6 +45,7 @@ final class GameScene: SKScene {
     private let selectionLabel = SKLabelNode(fontNamed: "AvenirNext-Medium")
     private let waveLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
     private let baseHealthLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
+    private let moneyLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold") // MH2D-69 HUD currency
     private let baseHealth = BaseHealth() // MH2D-56 / MH2D-126
     private var isGameOver = false          // MH2D-57
     private var gameOverOverlay: GameOverOverlay?   // MH2D-81
@@ -82,10 +83,10 @@ final class GameScene: SKScene {
         addChild(worldNode)
         waveLabel.fontSize = 20
         waveLabel.fontColor = .white
-        waveLabel.horizontalAlignmentMode = .right
+        waveLabel.horizontalAlignmentMode = .left
         waveLabel.verticalAlignmentMode = .top
         waveLabel.zPosition = Layer.hud.rawValue
-        waveLabel.text = "Wave \(zombieManager.currentWave)"
+        waveLabel.text = "Wave \(zombieManager.currentWave)/\(zombieManager.totalWaves)"
         addChild(waveLabel)
         
         baseHealthLabel.fontSize = 20
@@ -95,6 +96,15 @@ final class GameScene: SKScene {
         baseHealthLabel.zPosition = Layer.hud.rawValue
         baseHealthLabel.text = "♥ \(baseHealth.current)"
         addChild(baseHealthLabel)
+
+        // MH2D-69: currency in the HUD (below wave and base health).
+        moneyLabel.fontSize = 20
+        moneyLabel.fontColor = .systemYellow
+        moneyLabel.horizontalAlignmentMode = .left
+        moneyLabel.verticalAlignmentMode = .top
+        moneyLabel.zPosition = Layer.hud.rawValue
+        moneyLabel.text = "$\(wallet.money)"
+        addChild(moneyLabel)
         
         
         setUpTowerPanel()
@@ -103,6 +113,7 @@ final class GameScene: SKScene {
         wallet.onChange = { [weak self] money in
             guard let self else { return }
             self.towerSelection.updateMoney(money)
+            self.moneyLabel.text = "$\(money)" // MH2D-70: HUD follows the wallet
             self.refreshTowerPanel()
         }
         // MH2D-53: kills pay the player.
@@ -173,14 +184,16 @@ final class GameScene: SKScene {
         sellButton = nil
         lastSafeArea = view?.safeAreaInsets ?? .zero
         
-        waveLabel.position = CGPoint(
-            x: size.width - lastSafeArea.right - 16,
-            y: size.height - lastSafeArea.top - 16
-        )
-        
+        // HUD: wave and money top-left (under the debug line), base health top-right.
+        let hudLeft = lastSafeArea.left + 16
+        let hudTop = size.height - lastSafeArea.top
+
+        waveLabel.position = CGPoint(x: hudLeft, y: hudTop - 40)
+        moneyLabel.position = CGPoint(x: hudLeft, y: hudTop - 70)
+
         baseHealthLabel.position = CGPoint(
             x: size.width - lastSafeArea.right - 16,
-            y: waveLabel.position.y - 30
+            y: hudTop - 16
         )
 
         let left = lastSafeArea.left + 16
