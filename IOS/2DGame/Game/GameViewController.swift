@@ -30,9 +30,10 @@ class GameViewController: UIViewController {
         guard let skView = self.view as? SKView else { return }
 
         skView.ignoresSiblingOrder = true
-        skView.showsFPS = true
-        skView.showsNodeCount = true
-        startNewGame(in: skView)
+        skView.showsFPS = false
+        skView.showsNodeCount = false
+        SoundManager.shared.startMusic()
+        showMainMenu(in: skView)
 
         // MH2D-37: wire lifecycle notifications to the scene's pause/resume.
         NotificationCenter.default.addObserver(
@@ -49,14 +50,32 @@ class GameViewController: UIViewController {
         )
     }
 
+    /// MH2D-22: the main menu. Play leads to map select, then into a game.
+    private func showMainMenu(in skView: SKView) {
+        gameScene = nil
+        let menu = MainMenuScene(size: skView.bounds.size)
+        menu.scaleMode = .resizeFill
+        menu.onPlayRequested = { [weak self, weak skView] map in
+            guard let skView else { return }
+            self?.startNewGame(in: skView, map: map)
+        }
+        skView.presentScene(menu)
+    }
+
     /// MH2D-82: builds a brand-new scene (money, waves, base health, towers
-    /// all start fresh). Called at launch and when the player taps Retry.
-    private func startNewGame(in skView: SKView) {
+    /// all start fresh) on the chosen map. Called when a map is picked and
+    /// when the player taps Retry (same map again).
+    private func startNewGame(in skView: SKView, map: MapDefinition) {
         let scene = GameScene(size: skView.bounds.size)
         scene.scaleMode = .resizeFill
+        scene.map = map
         scene.onRetryRequested = { [weak self, weak skView] in
             guard let skView else { return }
-            self?.startNewGame(in: skView)
+            self?.startNewGame(in: skView, map: map)
+        }
+        scene.onMainMenuRequested = { [weak self, weak skView] in
+            guard let skView else { return }
+            self?.showMainMenu(in: skView)
         }
         gameScene = scene
         skView.presentScene(scene)

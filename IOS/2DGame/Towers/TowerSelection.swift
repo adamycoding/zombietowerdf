@@ -9,12 +9,17 @@
 // This file contains game rules, not drawing code.
 
 enum TowerType: String, CaseIterable {
-    case soldier, sniper, ice
+    case soldier, gunner, sniper, grenadier, flamethrower, tesla, trapper, ice
 
     var displayName: String {
         switch self {
-        case .soldier: return "Soldier"
+        case .soldier: return "Turret"
+        case .gunner: return "Gunner"
         case .sniper: return "Sniper"
+        case .grenadier: return "Grenadier"
+        case .flamethrower: return "Flamer"
+        case .tesla: return "Tesla"
+        case .trapper: return "Barbed Wire"
         case .ice: return "Ice"
         }
     }
@@ -22,7 +27,12 @@ enum TowerType: String, CaseIterable {
     var cost: Int {
         switch self {
         case .soldier: return 100
+        case .gunner: return 150
         case .sniper: return 200
+        case .grenadier: return 250
+        case .flamethrower: return 175
+        case .tesla: return 350
+        case .trapper: return 125
         case .ice: return 300
         }
     }
@@ -30,7 +40,12 @@ enum TowerType: String, CaseIterable {
     var symbolName: String {
         switch self {
         case .soldier: return "shield.fill"
+        case .gunner: return "bolt.fill"
         case .sniper: return "scope"
+        case .grenadier: return "flame.fill"
+        case .flamethrower: return "flame"
+        case .tesla: return "bolt.circle.fill"
+        case .trapper: return "xmark.shield.fill"
         case .ice: return "snowflake"
         }
     }
