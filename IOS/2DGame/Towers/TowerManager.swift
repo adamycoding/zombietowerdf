@@ -28,11 +28,13 @@ final class TowerManager {
         let type: TowerType
         let node: SKNode
         var priority: TargetPriority = .close
-        /// MH2D-17: how many times this tower has been upgraded (0...TowerUpgrade.maxTier).
-        var tier = 0
+        /// How far this tower has gone down each of its three upgrade paths (0...5).
+        var levels = [0, 0, 0]
+        /// Total upgrades bought (one pip each).
+        var tier: Int { levels.reduce(0, +) }
 
         /// This tower's numbers, including its upgrades.
-        var spec: ProjectileSpec { TowerUpgrade.spec(for: type, tier: tier) }
+        var spec: ProjectileSpec { TowerUpgrade.spec(for: type, levels: levels) }
     }
 
     /// The area of the map where towers may be placed.
@@ -219,25 +221,25 @@ final class TowerManager {
 
     /// A tower sells for part of everything spent on it, upgrades included.
     static func sellValue(of tower: PlacedTower) -> Int {
-        Int((Double(TowerUpgrade.moneySpent(on: tower.type, tier: tower.tier)) * sellRefundRate).rounded())
+        Int((Double(TowerUpgrade.moneySpent(on: tower.type, levels: tower.levels)) * sellRefundRate).rounded())
     }
 
     // MARK: Upgrading (MH2D-17)
 
-    /// What the next upgrade of the selected tower costs, or nil if nothing is
-    /// selected or it is already at the top tier.
-    var upgradeCost: Int? {
-        guard let tower = selected, tower.tier < TowerUpgrade.maxTier else { return nil }
-        return TowerUpgrade.cost(of: tower.type, toTier: tower.tier + 1)
+    /// What the next upgrade on `path` of the selected tower costs, or nil if
+    /// nothing is selected or that path is maxed out or locked.
+    func upgradeCost(path: Int) -> Int? {
+        guard let tower = selected else { return nil }
+        return TowerUpgrade.nextCost(for: tower.type, levels: tower.levels, path: path)
     }
 
-    /// Raises the selected tower one tier (the scene has already taken the
-    /// money). Returns false if nothing is selected or it is at the cap.
+    /// Takes the selected tower one level down `path` (the scene has already
+    /// taken the money). Returns false if that isn't allowed.
     @discardableResult
-    func upgradeSelected() -> Bool {
+    func upgradeSelected(path: Int) -> Bool {
         guard let index = selectedIndex, placed.indices.contains(index),
-              placed[index].tier < TowerUpgrade.maxTier else { return false }
-        placed[index].tier += 1
+              TowerUpgrade.canUpgrade(levels: placed[index].levels, path: path) else { return false }
+        placed[index].levels[path] += 1
         let tower = placed[index]
         // Range ring grows with the range.
         tower.node.childNode(withName: "rangeRing")?.removeFromParent()

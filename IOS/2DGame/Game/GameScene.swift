@@ -48,19 +48,20 @@ final class GameScene: SKScene {
     private var panelDirty = false
     /// Labels that count down "Need $X" so they can be updated in place without a rebuild.
     private var needLabels: [(tower: TowerType, label: SKLabelNode)] = []
-    private var upgradeNeedLabel: (cost: Int, label: SKLabelNode)?
+    private var upgradeNeedLabels: [(cost: Int, label: SKLabelNode)] = []
     /// Which cards / the Upgrade button were affordable when the panel was last drawn.
     private var drawnAffordability: [Bool] = []
     private func currentAffordability() -> [Bool] {
         var result = towerSelection.unlockedTowers.map { towerSelection.canSelect($0) }
-        result.append(towerManager.upgradeCost.map { wallet.canAfford($0) } ?? false)
+        for path in 0..<TowerUpgrade.pathCount { result.append(towerManager.upgradeCost(path: path).map { wallet.canAfford($0) } ?? false) }
         return result
     }
 
     private var lastPanelRefreshTime: TimeInterval = 0
     private let panelRefreshInterval: TimeInterval = 0.25
     private var priorityButton: SKSpriteNode?
-    private var upgradeButton: SKSpriteNode?   // MH2D-17: only while a placed tower is selected
+    private var upgradeButtons: [(path: Int, node: SKSpriteNode)] = []   // only while a placed tower is selected
+    private var pendingUpgradePath: Int?
     private let selectionLabel = OutlinedLabel(fontNamed: "AvenirNext-Medium")
     private let waveLabel = OutlinedLabel(fontNamed: "AvenirNext-DemiBold")
     private let baseHealthLabel = OutlinedLabel(fontNamed: "AvenirNext-DemiBold")
@@ -70,6 +71,8 @@ final class GameScene: SKScene {
     private var gameOverOverlay: GameOverOverlay?   // MH2D-81
     private let pauseButton = SKShapeNode(rectOf: CGSize(width: 40, height: 32), cornerRadius: 8)
     /// Fast-forward button: toggles 1x <-> 1.5x (like Bloons TD).
+    private let nextWaveButton = SKShapeNode(rectOf: CGSize(width: 150, height: 32), cornerRadius: 8)
+    private let nextWaveLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
     private let speedButton = SKShapeNode(rectOf: CGSize(width: 52, height: 32), cornerRadius: 8)
     private let speedLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
     private var gameSpeed: Double = 1
@@ -166,7 +169,7 @@ final class GameScene: SKScene {
             for entry in self.needLabels {
                 entry.label.text = "Need $\(max(0, entry.tower.cost - money))"
             }
-            if let entry = self.upgradeNeedLabel {
+            for entry in self.upgradeNeedLabels {
                 entry.label.text = "Need $\(max(0, entry.cost - money))"
             }
             if self.currentAffordability() != self.drawnAffordability {
@@ -245,10 +248,10 @@ final class GameScene: SKScene {
         towerPanel.removeAllChildren()
         towerCards.removeAll()
         needLabels.removeAll()
-        upgradeNeedLabel = nil
+        upgradeNeedLabels.removeAll()
         cancelButton = nil
         sellButton = nil
-        upgradeButton = nil
+        upgradeButtons.removeAll()
         priorityButton = nil
         lastSafeArea = view?.safeAreaInsets ?? .zero
         
@@ -293,6 +296,20 @@ final class GameScene: SKScene {
                 pauseButton.addChild(bar)
             }
             addChild(pauseButton)
+        }
+        nextWaveButton.position = CGPoint(x: panelLeftEdge - 168 - 115, y: hudTop - 24)
+        if nextWaveButton.parent == nil {
+            nextWaveButton.fillColor = SKColor.systemGreen.withAlphaComponent(0.9)
+            nextWaveButton.strokeColor = .white
+            nextWaveButton.lineWidth = 2
+            nextWaveButton.zPosition = Layer.hud.rawValue
+            nextWaveLabel.fontSize = 15
+            nextWaveLabel.fontColor = .white
+            nextWaveLabel.verticalAlignmentMode = .center
+            nextWaveLabel.horizontalAlignmentMode = .center
+            nextWaveButton.addChild(nextWaveLabel)
+            nextWaveButton.run(.repeatForever(.sequence([.scale(to: 1.06, duration: 0.6), .scale(to: 1.0, duration: 0.6)])))
+            addChild(nextWaveButton)
         }
         speedButton.position = CGPoint(x: panelLeftEdge - 168, y: hudTop - 24)
         if speedButton.parent == nil {
@@ -450,26 +467,15 @@ final class GameScene: SKScene {
         towerPanel.addChild(name)
         y -= 22
 
-        let tierText = tower.tier >= TowerUpgrade.maxTier ? "Tier \(tower.tier) · MAX" : "Tier \(tower.tier) / \(TowerUpgrade.maxTier)"
-        let tierLabel = makeLabel(tierText, size: 11)
-        tierLabel.fontColor = tower.tier >= TowerUpgrade.maxTier ? .systemYellow : UIColor(white: 0.75, alpha: 1)
+        let levelsText = tower.levels.map(String.init).joined(separator: " · ")
+        let tierLabel = makeLabel("Paths  \(levelsText)", size: 11)
+        tierLabel.fontColor = UIColor(white: 0.75, alpha: 1)
         tierLabel.position = CGPoint(x: centerX, y: y - 4)
         towerPanel.addChild(tierLabel)
-        y -= 18
-
-        // Tier pips: filled up to the current tier.
-        for i in 0..<TowerUpgrade.maxTier {
-            let pip = SKShapeNode(circleOfRadius: 4)
-            pip.fillColor = i < tower.tier ? .systemYellow : UIColor(white: 0.3, alpha: 1)
-            pip.strokeColor = UIColor(white: 0.1, alpha: 1)
-            pip.lineWidth = 1
-            pip.position = CGPoint(x: centerX + (CGFloat(i) - CGFloat(TowerUpgrade.maxTier - 1) / 2) * 14, y: y - 4)
-            towerPanel.addChild(pip)
-        }
         y -= 20
 
         // Current -> next stats.
-        for line in TowerUpgrade.statLines(for: tower.type, tier: tower.tier) {
+        for line in TowerUpgrade.statLines(for: tower.type, levels: tower.levels) {
             let title = makeLabel(line.name, size: 10)
             title.fontColor = UIColor(white: 0.65, alpha: 1)
             title.position = CGPoint(x: centerX, y: y - 5)
@@ -483,7 +489,7 @@ final class GameScene: SKScene {
             }
             value.position = CGPoint(x: centerX, y: y - 20)
             towerPanel.addChild(value)
-            y -= 34
+            y -= 30
         }
         y -= 4
 
@@ -500,27 +506,37 @@ final class GameScene: SKScene {
             y -= priorityHeight + 8
         }
 
-        // Upgrade button (or MAX).
-        let buttonHeight: CGFloat = 40
-        if let cost = towerManager.upgradeCost {
-            let canAfford = wallet.canAfford(cost)
-            let button = SKSpriteNode(color: canAfford ? .systemGreen : UIColor(white: 0.28, alpha: 1),
-                                      size: CGSize(width: width - 16, height: buttonHeight))
-            button.position = CGPoint(x: centerX, y: y - buttonHeight / 2)
-            let buttonLabel = makeLabel(canAfford ? "Upgrade $\(cost)" : "Need $\(cost - wallet.money)", size: 13)
-            button.addChild(buttonLabel)
-            if !canAfford { upgradeNeedLabel = (cost, buttonLabel) }
+        // One button per upgrade path: next upgrade name + price, MAX, or LOCKED.
+        let pathHeight: CGFloat = 40
+        for path in 0..<TowerUpgrade.pathCount {
+            let level = tower.levels[path]
+            let cost = towerManager.upgradeCost(path: path)
+            let canAfford = cost.map { wallet.canAfford($0) } ?? false
+            let color: UIColor
+            let title: String
+            if let cost {
+                color = canAfford ? [UIColor.systemTeal, .systemIndigo, .systemOrange][path] : UIColor(white: 0.28, alpha: 1)
+                title = canAfford ? "\(TowerUpgrade.upgradeName(for: tower.type, path: path, level: level + 1)) $\(cost)"
+                                  : "Need $\(cost - wallet.money)"
+            } else if level >= TowerUpgrade.maxLevel {
+                color = UIColor(white: 0.22, alpha: 1); title = "MAX"
+            } else {
+                color = UIColor(red: 0.28, green: 0.12, blue: 0.12, alpha: 1); title = "LOCKED"
+            }
+            let button = SKSpriteNode(color: color, size: CGSize(width: width - 16, height: pathHeight))
+            button.position = CGPoint(x: centerX, y: y - pathHeight / 2)
+            let top = makeLabel("\(TowerUpgrade.pathName(for: tower.type, path: path))  Lv \(level)/\(TowerUpgrade.maxLevel)", size: 9)
+            top.fontColor = UIColor(white: 0.9, alpha: 1)
+            top.position = CGPoint(x: 0, y: 7)
+            button.addChild(top)
+            let bottom = makeLabel(title, size: 11)
+            bottom.position = CGPoint(x: 0, y: -10)
+            if level >= TowerUpgrade.maxLevel { bottom.fontColor = .systemYellow }
+            button.addChild(bottom)
+            if let cost, !canAfford { upgradeNeedLabels.append((cost, bottom)) }
             towerPanel.addChild(button)
-            upgradeButton = canAfford ? button : nil
-            y -= buttonHeight
-        } else {
-            let button = SKSpriteNode(color: UIColor(white: 0.28, alpha: 1), size: CGSize(width: width - 16, height: buttonHeight))
-            button.position = CGPoint(x: centerX, y: y - buttonHeight / 2)
-            let max = makeLabel("MAX TIER", size: 13)
-            max.fontColor = .systemYellow
-            button.addChild(max)
-            towerPanel.addChild(button)
-            y -= buttonHeight
+            if canAfford { upgradeButtons.append((path, button)) }
+            y -= pathHeight + 4
         }
         y -= 10
 
@@ -533,9 +549,9 @@ final class GameScene: SKScene {
     }
 
     /// Pay for and apply the selected tower's next upgrade.
-    private func upgradeSelectedTower() {
-        guard let cost = towerManager.upgradeCost, wallet.canAfford(cost) else { return }
-        guard towerManager.upgradeSelected() else { return }
+    private func upgradeSelectedTower(path: Int) {
+        guard let cost = towerManager.upgradeCost(path: path), wallet.canAfford(cost) else { return }
+        guard towerManager.upgradeSelected(path: path) else { return }
         wallet.spend(cost)
         SoundManager.shared.play(.upgrade)
         refreshTowerPanel()         // show the new tier right away
@@ -646,6 +662,12 @@ final class GameScene: SKScene {
             }
             return
         }
+        if !nextWaveButton.isHidden, nextWaveButton.frame.insetBy(dx: -8, dy: -8).contains(touch.location(in: self)) {
+            zombieManager.startWave()
+            SoundManager.shared.play(.tap)
+            updateWaveLabel()
+            return
+        }
         if speedButton.frame.insetBy(dx: -8, dy: -8).contains(touch.location(in: self)) {
             gameSpeed = gameSpeed == 1 ? 1.5 : 1
             worldNode.speed = CGFloat(gameSpeed) // animations keep up with the faster game
@@ -676,8 +698,9 @@ final class GameScene: SKScene {
                 touchStartedOnSell = true
                 return
             }
-            if let upgrade = upgradeButton, upgrade.contains(panelPoint) {
+            if let hit = upgradeButtons.first(where: { $0.node.contains(panelPoint) }) {
                 touchStartedOnUpgrade = true
+                pendingUpgradePath = hit.path
                 return
             }
             // Remember where the touch began: dragging up/down scrolls the
@@ -760,9 +783,12 @@ final class GameScene: SKScene {
 
         if touchStartedOnUpgrade {
             touchStartedOnUpgrade = false
-            if let upgrade = upgradeButton, upgrade.contains(touch.location(in: towerPanel)) {
-                upgradeSelectedTower()
+            if let path = pendingUpgradePath,
+               let pressed = upgradeButtons.first(where: { $0.path == path }),
+               pressed.node.contains(touch.location(in: towerPanel)) {
+                upgradeSelectedTower(path: path)
             }
+            pendingUpgradePath = nil
             return
         }
 
@@ -923,6 +949,8 @@ final class GameScene: SKScene {
 
     /// "Wave 12/40", or just "Wave 41" once the player has continued past the last wave.
     private func updateWaveLabel() {
+        nextWaveButton.isHidden = zombieManager.isWaveActive || isGameOver || isWinScreenUp
+        nextWaveLabel.text = "Start Wave \(zombieManager.currentWave)"
         if zombieManager.currentWave > zombieManager.totalWaves {
             waveLabel.text = "Wave \(zombieManager.currentWave)"
         } else {
