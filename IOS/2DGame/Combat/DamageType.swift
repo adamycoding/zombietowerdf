@@ -51,6 +51,19 @@ extension ZombieType {
         switch self {
         case .normal:
             return 1.0
+        case .runner:
+            // Fragile: wire and fire catch it hard.
+            return (type == .trap || type == .fire) ? 1.5 : 1.0
+        case .brute:
+            // Thick hide: bullets bounce off, blasts and electricity hurt.
+            switch type {
+            case .bullet: return 0.5
+            case .fire: return 0.75
+            case .trap: return 0.5
+            case .explosive: return 1.5
+            case .electric: return 1.25
+            default: return 1.0
+            }
         }
     }
 }

@@ -71,8 +71,14 @@ final class ZombieManager {
     private static func makeWave(number: Int, multiplier: Double = 1) -> WaveDefinition {
         let count = Int((Double(10 + (number - 1) * 4) * multiplier).rounded())
         let interval = max(0.25, 1.2 - Double(number - 1) * 0.025)
-        return WaveDefinition(zombieTypes: Array(repeating: .normal, count: count),
-                              spawnInterval: interval)
+        // Same number of zombies as before; some of them are tougher kinds.
+        // Runners show up from wave 3, brutes from wave 6 (spread out in a fixed pattern).
+        let types: [ZombieType] = (0..<count).map { i in
+            if number >= 6 && i % 7 == 6 { return .brute }
+            if number >= 3 && i % 5 == 4 { return .runner }
+            return .normal
+        }
+        return WaveDefinition(zombieTypes: types, spawnInterval: interval)
     }
 
     private var waveDefinition: WaveDefinition {
@@ -99,7 +105,7 @@ final class ZombieManager {
     }
 
     func updateSpawning(deltaTime: TimeInterval) {
-        guard zombiesSpawnedThisWave < zombiesPerWave else {
+        guard isWaveActive, zombiesSpawnedThisWave < zombiesPerWave else {
             return
         }
 
@@ -117,15 +123,15 @@ final class ZombieManager {
     /// draw call), and a late wave has well over a hundred of them. So the
     /// zombie is drawn from shapes ONCE, turned into a texture, and every
     /// zombie is then a single sprite using that texture.
-    private static var bakedBody: (frames: [SKTexture], size: CGSize, anchor: CGPoint)?
+    private static var bakedBodies: [ZombieType: (frames: [SKTexture], size: CGSize, anchor: CGPoint)] = [:]
 
     /// Bakes the walk cycle: the same zombie in a few leg/arm positions. All
     /// frames are cut from the same rectangle, so the sprite never jumps.
-    private static func bakeBody(using draw: (CGFloat) -> SKShapeNode) -> (frames: [SKTexture], size: CGSize, anchor: CGPoint) {
-        if let baked = bakedBody { return baked }
+    private static func bakeBody(type: ZombieType, using draw: (CGFloat) -> SKShapeNode) -> (frames: [SKTexture], size: CGSize, anchor: CGPoint) {
+        if let baked = bakedBodies[type] { return baked }
         func prepare(_ phase: CGFloat) -> SKShapeNode {
             let shapes = draw(phase)
-            shapes.fillColor = .systemGreen
+            shapes.fillColor = type.skinColor
             shapes.strokeColor = .black
             shapes.lineWidth = 2
             return shapes
@@ -139,12 +145,12 @@ final class ZombieManager {
         }
         let anchor = CGPoint(x: -frame.minX / frame.width, y: -frame.minY / frame.height)
         let baked = (frames: frames, size: frame.size, anchor: anchor)
-        bakedBody = baked
+        bakedBodies[type] = baked
         return baked
     }
 
     /// `phase` (-1...1) is where the legs and arms are in the walk cycle.
-    private func makeZombieNode(phase: CGFloat = 0) -> SKShapeNode {
+    private func makeZombieNode(phase: CGFloat = 0, type: ZombieType = .normal) -> SKShapeNode {
         // The main shape is now the head.
         // Existing damage and ice effects still change its color.
         let headPath = CGPath(
@@ -187,32 +193,38 @@ final class ZombieManager {
         // Two walking legs.
         for side: CGFloat in [-1, 1] {
             let leg = addPart(
-                width: 5, height: 9,
-                x: side * 4, y: -8 + side * phase * 2.5,
-                color: .darkGray
+                width: type == .brute ? 7 : (type == .runner ? 4 : 5),
+                height: type == .runner ? 11 : 9,
+                x: side * (type == .brute ? 5 : 4),
+                y: -8 + side * phase * (type == .runner ? 3.5 : 2.5),
+                color: type == .runner ? SKColor(red: 0.15, green: 0.2, blue: 0.45, alpha: 1) : (type == .brute ? SKColor(white: 0.22, alpha: 1) : .darkGray)
             )
             _ = leg
         }
 
         // Brown shirt.
         _ = addPart(
-            width: 12, height: 10,
+            width: type == .brute ? 18 : (type == .runner ? 9 : 12),
+            height: type == .brute ? 12 : 10,
             x: 0, y: -1,
-            color: SKColor(
-                red: 0.39, green: 0.36, blue: 0.27, alpha: 1
-            )
+            color: type.shirtColor
         )
+        if type == .brute {
+            // Studded leather straps across the chest.
+            _ = addPart(width: 3, height: 12, x: -4, y: -1, color: SKColor(white: 0.1, alpha: 1))
+            _ = addPart(width: 3, height: 12, x: 4, y: -1, color: SKColor(white: 0.1, alpha: 1))
+        }
 
         // Outstretched arms.
         for side: CGFloat in [-1, 1] {
             let arm = addPart(
-                width: 4, height: 9,
-                x: side * 8, y: -side * phase * 1.5,
-                color: SKColor(
-                    red: 0.57, green: 0.70, blue: 0.37, alpha: 1
-                )
+                width: type == .brute ? 7 : (type == .runner ? 3 : 4),
+                height: type == .brute ? 11 : 9,
+                x: side * (type == .brute ? 12 : (type == .runner ? 6.5 : 8)),
+                y: -side * phase * (type == .runner ? 2.5 : 1.5),
+                color: type.skinColor
             )
-            arm.zRotation = side * 0.4
+            arm.zRotation = side * (type == .runner ? 0.9 : 0.4)
         }
 
         // Eyes and pupils.
@@ -237,6 +249,24 @@ final class ZombieManager {
             color: .darkGray
         )
 
+        switch type {
+        case .runner:
+            // Red headband with a tail.
+            let band = addPart(width: 14, height: 3, x: 0, y: 13, color: .systemRed)
+            band.zPosition = 3
+            let tail = addPart(width: 5, height: 2, x: 9, y: 12, color: .systemRed)
+            tail.zRotation = -0.5
+        case .brute:
+            // Heavy angry brow and two tusks.
+            let brow = addPart(width: 12, height: 2.5, x: 0, y: 12.5, color: SKColor(white: 0.1, alpha: 1))
+            brow.zPosition = 3
+            for x: CGFloat in [-2.5, 2.5] {
+                _ = addPart(width: 1.5, height: 3, x: x, y: 3.5, color: .white)
+            }
+        case .normal:
+            break
+        }
+
         return zombie
     }
 
@@ -248,11 +278,12 @@ final class ZombieManager {
         let lane = zombiesSpawnedThisWave % path.lanes.count
         guard let startPoint = path.lanes[lane].first else { return }
 
-        let body = ZombieManager.bakeBody { makeZombieNode(phase: $0) }
+        let body = ZombieManager.bakeBody(type: type) { makeZombieNode(phase: $0, type: type) }
         let zombie = SKSpriteNode(texture: body.frames[1], size: body.size)
         zombie.anchorPoint = body.anchor
-        zombie.color = .systemTeal       // used as the tint while slowed / hit / dying
-        zombie.colorBlendFactor = 0
+        zombie.color = type.tint         // tint: this kind's colour, teal while slowed, white when hit
+        zombie.colorBlendFactor = type.tintBlend
+        zombie.setScale(type.scale)
         zombie.name = "zombie"
         zombie.position = startPoint
         zombie.zPosition = Layer.zombies.rawValue
@@ -271,14 +302,19 @@ final class ZombieManager {
             .group([
                 .repeatForever(.animate(with: body.frames, timePerFrame: step, resize: false, restore: false)),
                 .repeatForever(.sequence([
-                    .scaleY(to: 0.97, duration: step * 2),
-                    .scaleY(to: 1.02, duration: step * 2)
+                    .scaleY(to: 0.97 * type.scale, duration: step * 2),
+                    .scaleY(to: 1.02 * type.scale, duration: step * 2)
                 ]))
             ])
         ]), withKey: "shamble")
 
         world.addChild(zombie)
-        zombies.append(Zombie(node: zombie, type: type, lane: lane))
+        var state = Zombie(node: zombie, type: type, lane: lane)
+        state.maxHealth = type.health
+        state.health = type.health
+        state.reward = type.reward
+        state.hurtbox = Hurtbox(radius: ZombieManager.radius * type.scale)
+        zombies.append(state)
     }
 
     // MARK: Movement
@@ -299,14 +335,16 @@ final class ZombieManager {
             }
             // Slowed zombies are tinted teal (a hit flash in progress wins).
             if zombie.action(forKey: "hitFlash") == nil {
-                let target: CGFloat = slowed ? 0.55 : 0
+                let kind = zombies[index].type
+                let target: CGFloat = slowed ? 0.55 : kind.tintBlend
                 if zombie.colorBlendFactor != target {
-                    zombie.color = .systemTeal
+                    zombie.color = slowed ? .systemTeal : kind.tint
                     zombie.colorBlendFactor = target
                 }
             }
-            zombie.speed = speedMultiplier // slowed zombies shamble slower too
-            var remainingMovement = speed * speedMultiplier * CGFloat(deltaTime)
+            let kindSpeed = zombies[index].type.speedFactor
+            zombie.speed = speedMultiplier * kindSpeed // slowed zombies shamble slower too
+            var remainingMovement = speed * speedMultiplier * kindSpeed * CGFloat(deltaTime)
 
             while remainingMovement > 0 {
                 let waypointIndex = zombies[index].nextWaypointIndex
@@ -522,11 +560,23 @@ final class ZombieManager {
     
     // Checks if wave has fully spawned and if there is no zombies left.
     var isWaveComplete: Bool {
+        isWaveActive &&
         zombiesSpawnedThisWave >= zombiesPerWave &&
         zombies.isEmpty
     }
     
     private(set) var currentWave: Int = 1
+
+    /// Waves are started by the player (the Next Wave button). False while waiting for that tap.
+    private(set) var isWaveActive = false
+
+    /// Starts spawning the current wave. Does nothing if a wave is already running.
+    func startWave() {
+        guard !isWaveActive else { return }
+        isWaveActive = true
+        spawnTimer = 0
+        print("Starting Wave \(currentWave)")
+    }
     
     var totalWaves: Int {
         ZombieManager.totalWaveCount
@@ -537,11 +587,11 @@ final class ZombieManager {
     /// Win screen -> Continue: keep playing past the last wave.
     func continueAfterVictory() {
         isEndless = true
+        isWaveActive = false
         currentWave += 1
         zombiesSpawnedThisWave = 0
         spawnTimer = 0
         hasAnnouncedWaveCompletion = false
-        print("Starting Wave \(currentWave)")
     }
 
     func checkWaveCompletion() {
@@ -565,8 +615,7 @@ final class ZombieManager {
         zombiesSpawnedThisWave = 0
         spawnTimer = 0
         hasAnnouncedWaveCompletion = false
-
-        print("Starting Wave \(currentWave)")
+        isWaveActive = false   // wait for the player to start the next wave
     }
     
     
