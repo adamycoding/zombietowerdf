@@ -1,0 +1,46 @@
+# Zombie Tower Defense — Jira Progress Report
+
+**Date:** November 3, 2026  
+**Developer:** Adam Yang
+
+### Round-Based Difficulty Curve
+**Subtasks:** MH2D-63, MH2D-64, MH2D-65
+
+- Defined 15 rounds in `Rounds.json`.
+- Added harder rounds followed by breather rounds at 5, 9, and 13.
+- Connected the round data to the zombie spawner.
+- Made enemy counts, type mixes, and spawn intervals configurable without editing Swift.
+
+### Wave Complete / Next Wave UI
+**Subtasks:** MH2D-66, MH2D-67, MH2D-68
+
+- Added a completion screen showing the completed wave and $50 bonus.
+- Awarded the bonus before the next wave starts.
+- Added a Next Wave button to control progression.
+- Added Manage Towers so players can build and upgrade between waves.
+
+### Enemy Type Variety
+**Subtasks:** MH2D-85, MH2D-86
+
+- Added Normal, Runner, Armored, and Tank zombies.
+- Defined distinct health, movement speed, and kill rewards.
+- Added illustrated sprites based on the concept board.
+- Added walking motion, hit flashes, and ice tint effects.
+- Introduced different enemy types through the round configuration.
+
+### Branching Upgrade Paths
+**Subtasks:** MH2D-83, MH2D-84
+
+- Added two upgrade paths per tower, with two tiers each.
+- Made the first purchase lock that individual tower to its chosen path.
+- Added a panel showing tier costs, stat changes, current tiers, and locked paths.
+- Connected purchases to player currency and tower combat stats.
+- Enabled tower upgrades between waves.
+
+### Testing and Current Status
+
+The features were built and manually checked in Xcode during implementation. Round progression, completion controls, enemy mixes, upgrade purchases, and path locking were reported working.
+
+**Remaining work:** Resolve conflicts from the latest pull, rebuild the combined project, and repeat gameplay checks. A full 15-round playthrough and balance testing are still needed.
+
+**Jira status recommendation:** Ready for review after the merge conflicts are resolved and the combined project passes verification.
