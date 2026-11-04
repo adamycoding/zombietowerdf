@@ -6,114 +6,87 @@
 //
 
 import Foundation
+import UIKit
 
-enum ZombieType: String, Decodable {
+enum ZombieType: CaseIterable {
     case normal
-    case runner
-    case armored
-    case tank
+    case runner   // fast and fragile
+    case brute    // slow, big, very tough
 
-    var stats: ZombieStats {
+    var displayName: String {
         switch self {
-        case .normal:
-            return ZombieStats.normal
-        case .runner:
-            return ZombieStats.runner
-        case .armored:
-            return ZombieStats.armored
-        case .tank:
-            return ZombieStats.tank
+        case .normal: return "Walker"
+        case .runner: return "Runner"
+        case .brute: return "Brute"
+        }
+    }
+    /// Hit points.
+    var health: Int {
+        switch self {
+        case .normal: return ZombieManager.normalHealth
+        case .runner: return 2
+        case .brute: return 12
+        }
+    }
+    /// Money paid when it is killed.
+    var reward: Int {
+        switch self {
+        case .normal: return ZombieManager.normalReward
+        case .runner: return 6
+        case .brute: return 20
+        }
+    }
+    /// Walking speed compared with a normal zombie.
+    var speedFactor: CGFloat {
+        switch self {
+        case .normal: return 1
+        case .runner: return 1.7
+        case .brute: return 0.6
+        }
+    }
+    /// Drawn size compared with a normal zombie.
+    var scale: CGFloat {
+        switch self {
+        case .normal: return 1
+        case .runner: return 0.85
+        case .brute: return 1.3
+        }
+    }
+    /// Colour wash over the (same) zombie art, so each kind is easy to tell apart.
+    var tint: UIColor {
+        switch self {
+        case .normal: return .systemTeal
+        case .runner: return UIColor(red: 0.95, green: 0.85, blue: 0.2, alpha: 1)
+        case .brute: return UIColor(red: 0.75, green: 0.15, blue: 0.15, alpha: 1)
+        }
+    }
+    var tintBlend: CGFloat { 0 }   // identity now comes from the drawn art, not a tint
+
+    /// Skin colour of the drawn zombie.
+    var skinColor: UIColor {
+        switch self {
+        case .normal: return .systemGreen
+        case .runner: return UIColor(red: 0.78, green: 0.86, blue: 0.30, alpha: 1)
+        case .brute:  return UIColor(red: 0.30, green: 0.45, blue: 0.30, alpha: 1)
+        }
+    }
+
+    /// Clothing colour of the drawn zombie.
+    var shirtColor: UIColor {
+        switch self {
+        case .normal: return UIColor(red: 0.39, green: 0.36, blue: 0.27, alpha: 1)
+        case .runner: return UIColor(red: 0.95, green: 0.55, blue: 0.10, alpha: 1)
+        case .brute:  return UIColor(red: 0.35, green: 0.12, blue: 0.12, alpha: 1)
         }
     }
 }
 
-// One group of a particular enemy type.
-struct ZombieGroup: Decodable {
-    let type: ZombieType
-    let count: Int
-}
-
-struct RoundConfiguration: Decodable {
-    let rounds: [WaveDefinition]
-}
-
-struct WaveDefinition: Decodable {
-    let name: String
+// this defines how many zmobies per wave and also spawning intervals (how fast they spawn).
+struct WaveDefinition {
     let zombieTypes: [ZombieType]
     let spawnInterval: TimeInterval
 
     var zombieCount: Int {
         zombieTypes.count
-    }
-
-    init(zombieTypes: [ZombieType], spawnInterval: TimeInterval) {
-        self.name = ""
-        self.zombieTypes = zombieTypes
-        self.spawnInterval = spawnInterval
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case name
-        case count
-        case groups
-        case spawnInterval
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-
-        name = try container.decode(String.self, forKey: .name)
-
-        let interval = try container.decode(
-            TimeInterval.self,
-            forKey: .spawnInterval
-        )
-
-        guard interval.isFinite, interval > 0 else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .spawnInterval,
-                in: container,
-                debugDescription: "Spawn interval must be greater than zero."
-            )
-        }
-
-        let groups: [ZombieGroup]
-
-        if container.contains(.groups) {
-            groups = try container.decode(
-                [ZombieGroup].self,
-                forKey: .groups
-            )
-        } else {
-            // Still supports your current count-only JSON.
-            let count = try container.decode(Int.self, forKey: .count)
-            groups = [ZombieGroup(type: .normal, count: count)]
-        }
-
-        guard !groups.isEmpty,
-              groups.allSatisfy({ $0.count > 0 && $0.count <= 1000 })
-        else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .groups,
-                in: container,
-                debugDescription: "Each group needs between 1 and 1000 zombies."
-            )
-        }
-
-        guard groups.count <= 1000,
-              groups.reduce(0, { $0 + $1.count }) <= 1000
-        else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .groups,
-                in: container,
-                debugDescription: "A round cannot exceed 1000 zombies."
-            )
-        }
-
-        zombieTypes = groups.flatMap { group in
-            Array(repeating: group.type, count: group.count)
-        }
-
-        spawnInterval = interval
     }
 }
