@@ -22,6 +22,7 @@ final class ZombieManager {
         var slowFactor: CGFloat = 1     // speed share while slowed (set by the ice tower)
         var maxHealth: Int = ZombieManager.normalHealth // MH2D-52
         var health: Int = ZombieManager.normalHealth
+        var resistedDamageRemainder: Double = 0 // preserve fractional boss damage between hits
         var reward: Int = ZombieManager.normalReward    // MH2D-53
     }
 
@@ -69,6 +70,9 @@ final class ZombieManager {
     /// 166). They also spawn faster as the waves go on, down to one every
     /// 0.25 s, so the difficulty keeps climbing the whole way.
     private static func makeWave(number: Int, multiplier: Double = 1) -> WaveDefinition {
+        if WaveDefinition.isBossWave(number) {
+            return WaveDefinition(zombieTypes: [.megaBoss], spawnInterval: 1.2)
+        }
         let count = Int((Double(10 + (number - 1) * 4) * multiplier).rounded())
         let interval = max(0.25, 1.2 - Double(number - 1) * 0.025)
         // Same number of zombies as before; some of them are tougher kinds.
@@ -123,15 +127,20 @@ final class ZombieManager {
     /// draw call), and a late wave has well over a hundred of them. So the
     /// zombie is drawn from shapes ONCE, turned into a texture, and every
     /// zombie is then a single sprite using that texture.
-    private static var bakedBodies: [ZombieType: (frames: [SKTexture], size: CGSize, anchor: CGPoint)] = [:]
+    private struct BodyKey: Hashable {
+        let type: ZombieType
+        let bossStyle: Int
+    }
+    private static var bakedBodies: [BodyKey: (frames: [SKTexture], size: CGSize, anchor: CGPoint)] = [:]
 
     /// Bakes the walk cycle: the same zombie in a few leg/arm positions. All
     /// frames are cut from the same rectangle, so the sprite never jumps.
-    private static func bakeBody(type: ZombieType, using draw: (CGFloat) -> SKShapeNode) -> (frames: [SKTexture], size: CGSize, anchor: CGPoint) {
-        if let baked = bakedBodies[type] { return baked }
+    private static func bakeBody(type: ZombieType, boss: BossProfile?, using draw: (CGFloat) -> SKShapeNode) -> (frames: [SKTexture], size: CGSize, anchor: CGPoint) {
+        let key = BodyKey(type: type, bossStyle: boss?.style ?? -1)
+        if let baked = bakedBodies[key] { return baked }
         func prepare(_ phase: CGFloat) -> SKShapeNode {
             let shapes = draw(phase)
-            shapes.fillColor = type.skinColor
+            shapes.fillColor = boss?.skinColor ?? type.skinColor
             shapes.strokeColor = .black
             shapes.lineWidth = 2
             return shapes
@@ -145,12 +154,12 @@ final class ZombieManager {
         }
         let anchor = CGPoint(x: -frame.minX / frame.width, y: -frame.minY / frame.height)
         let baked = (frames: frames, size: frame.size, anchor: anchor)
-        bakedBodies[type] = baked
+        bakedBodies[key] = baked
         return baked
     }
 
     /// `phase` (-1...1) is where the legs and arms are in the walk cycle.
-    private func makeZombieNode(phase: CGFloat = 0, type: ZombieType = .normal) -> SKShapeNode {
+    private func makeZombieNode(phase: CGFloat = 0, type: ZombieType = .normal, boss: BossProfile? = nil) -> SKShapeNode {
         // The main shape is now the head.
         // Existing damage and ice effects still change its color.
         let headPath = CGPath(
@@ -207,7 +216,7 @@ final class ZombieManager {
             width: type == .brute ? 18 : (type == .runner ? 9 : 12),
             height: type == .brute ? 12 : 10,
             x: 0, y: -1,
-            color: type.shirtColor
+            color: boss?.armorColor ?? type.shirtColor
         )
         if type == .brute {
             // Studded leather straps across the chest.
@@ -222,7 +231,7 @@ final class ZombieManager {
                 height: type == .brute ? 11 : 9,
                 x: side * (type == .brute ? 12 : (type == .runner ? 6.5 : 8)),
                 y: -side * phase * (type == .runner ? 2.5 : 1.5),
-                color: type.skinColor
+                color: boss?.skinColor ?? type.skinColor
             )
             arm.zRotation = side * (type == .runner ? 0.9 : 0.4)
         }
@@ -250,6 +259,42 @@ final class ZombieManager {
         )
 
         switch type {
+        case .megaBoss:
+            let accent = boss?.accentColor ?? .systemYellow
+            let armor = boss?.armorColor ?? .darkGray
+            for x: CGFloat in [-10, 10] {
+                let plate = addPart(width: 10, height: 8, x: x, y: 3, color: armor)
+                plate.zPosition = 3
+                _ = addPart(width: 2, height: 4, x: x, y: 7, color: accent)
+            }
+            switch boss?.style ?? 0 {
+            case 0: // Crowned king.
+                _ = addPart(width: 16, height: 4, x: 0, y: 18, color: accent)
+                for x: CGFloat in [-6, 0, 6] {
+                    _ = addPart(width: 3, height: 5, x: x, y: 21, color: accent)
+                }
+            case 1: // Ice-blue warlord with tall curved horns.
+                for side: CGFloat in [-1, 1] {
+                    let horn = addPart(width: 4, height: 12, x: side * 8, y: 18, color: accent)
+                    horn.zRotation = -side * 0.4
+                    horn.zPosition = 4
+                }
+                _ = addPart(width: 14, height: 4, x: 0, y: 14, color: armor)
+            case 2: // Red juggernaut: full helmet and glowing visor.
+                let helmet = addPart(width: 19, height: 15, x: 0, y: 12, color: armor)
+                helmet.zPosition = 4
+                let visor = addPart(width: 14, height: 3, x: 0, y: 12, color: accent)
+                visor.zPosition = 5
+                _ = addPart(width: 5, height: 8, x: 0, y: 23, color: accent)
+            default: // Toxic overlord: wide crest and tusks.
+                for x: CGFloat in [-8, -4, 0, 4, 8] {
+                    _ = addPart(width: 3, height: 8 - abs(x) * 0.4, x: x, y: 20, color: accent)
+                }
+                for x: CGFloat in [-5, 5] {
+                    let tusk = addPart(width: 3, height: 8, x: x, y: 2, color: .white)
+                    tusk.zPosition = 4
+                }
+            }
         case .runner:
             // Red headband with a tail.
             let band = addPart(width: 14, height: 3, x: 0, y: 13, color: .systemRed)
@@ -278,12 +323,16 @@ final class ZombieManager {
         let lane = zombiesSpawnedThisWave % path.lanes.count
         guard let startPoint = path.lanes[lane].first else { return }
 
-        let body = ZombieManager.bakeBody(type: type) { makeZombieNode(phase: $0, type: type) }
+        let boss = type == .megaBoss ? BossProfile(wave: currentWave) : nil
+        let spawnScale = boss?.scale ?? type.scale
+        let body = ZombieManager.bakeBody(type: type, boss: boss) {
+            makeZombieNode(phase: $0, type: type, boss: boss)
+        }
         let zombie = SKSpriteNode(texture: body.frames[1], size: body.size)
         zombie.anchorPoint = body.anchor
         zombie.color = type.tint         // tint: this kind's colour, teal while slowed, white when hit
         zombie.colorBlendFactor = type.tintBlend
-        zombie.setScale(type.scale)
+        zombie.setScale(spawnScale)
         zombie.name = "zombie"
         zombie.position = startPoint
         zombie.zPosition = Layer.zombies.rawValue
@@ -302,19 +351,24 @@ final class ZombieManager {
             .group([
                 .repeatForever(.animate(with: body.frames, timePerFrame: step, resize: false, restore: false)),
                 .repeatForever(.sequence([
-                    .scaleY(to: 0.97 * type.scale, duration: step * 2),
-                    .scaleY(to: 1.02 * type.scale, duration: step * 2)
+                    .scaleY(to: 0.97 * spawnScale, duration: step * 2),
+                    .scaleY(to: 1.02 * spawnScale, duration: step * 2)
                 ]))
             ])
         ]), withKey: "shamble")
 
         world.addChild(zombie)
         var state = Zombie(node: zombie, type: type, lane: lane)
-        state.maxHealth = type.health
-        state.health = type.health
-        state.reward = type.reward
-        state.hurtbox = Hurtbox(radius: ZombieManager.radius * type.scale)
+        state.maxHealth = boss?.health ?? type.health
+        state.health = state.maxHealth
+        state.reward = boss?.reward ?? type.reward
+        state.hurtbox = Hurtbox(radius: ZombieManager.radius * spawnScale)
         zombies.append(state)
+        if type == .megaBoss {
+            updateHealthBar(of: state)
+            // Move the bar above the crown (coordinates are local to the scaled sprite).
+            zombie.childNode(withName: "healthBack")?.position.y = 28
+        }
     }
 
     // MARK: Movement
@@ -455,7 +509,15 @@ final class ZombieManager {
         // MH2D-95: this zombie's resistance to the damage type scales the hit
         // (a real hit always does at least 1).
         let multiplier = zombies[index].type.damageMultiplier(for: type)
-        let dealt = damage > 0 ? max(1, Int((Double(damage) * multiplier).rounded())) : 0
+        let dealt: Int
+        if zombies[index].type == .megaBoss {
+            // A minimum of one per hit would erase resistance for weak area attacks.
+            let total = zombies[index].resistedDamageRemainder + Double(max(0, damage)) * multiplier
+            dealt = Int(total.rounded(.down))
+            zombies[index].resistedDamageRemainder = total - Double(dealt)
+        } else {
+            dealt = damage > 0 ? max(1, Int((Double(damage) * multiplier).rounded())) : 0
+        }
         zombies[index].health = max(0, zombies[index].health - dealt)
         let state = zombies[index]
         updateHealthBar(of: state)
@@ -565,6 +627,8 @@ final class ZombieManager {
         zombies.isEmpty
     }
     
+    //this is what wave you will start on if you click play, you can edit to boss level to test boss levels.
+    //STARTING WAVE
     private(set) var currentWave: Int = 1
 
     /// Waves are started by the player (the Next Wave button). False while waiting for that tap.

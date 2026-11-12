@@ -950,12 +950,14 @@ final class GameScene: SKScene {
     /// "Wave 12/40", or just "Wave 41" once the player has continued past the last wave.
     private func updateWaveLabel() {
         nextWaveButton.isHidden = zombieManager.isWaveActive || isGameOver || isWinScreenUp
-        nextWaveLabel.text = "Start Wave \(zombieManager.currentWave)"
+        let bossRound = WaveDefinition.isBossWave(zombieManager.currentWave)
+        nextWaveLabel.text = bossRound ? "Start Boss Wave \(zombieManager.currentWave)" : "Start Wave \(zombieManager.currentWave)"
         if zombieManager.currentWave > zombieManager.totalWaves {
             waveLabel.text = "Wave \(zombieManager.currentWave)"
         } else {
             waveLabel.text = "Wave \(zombieManager.currentWave)/\(zombieManager.totalWaves)"
         }
+        if bossRound { waveLabel.text = "BOSS · " + (waveLabel.text ?? "") }
     }
 
     // MARK: - Win screen
