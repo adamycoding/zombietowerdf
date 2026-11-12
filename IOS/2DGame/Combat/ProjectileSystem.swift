@@ -95,7 +95,9 @@ final class ProjectileSystem {
             let length = hypot(dx, dy)
             if length > 0 {
                 let flightTime = hypot(pos.x - origin.x, pos.y - origin.y) / spec.speed
-                let reach = min(length, zombies.speed * flightTime)
+                let slow = zombie.slowTimer > 0 ? zombie.slowFactor : 1
+                let targetSpeed = zombies.speed * zombie.type.speedFactor * slow
+                let reach = min(length, targetSpeed * flightTime)
                 aim = CGPoint(x: pos.x + dx / length * reach, y: pos.y + dy / length * reach)
             }
         }

@@ -49,6 +49,11 @@ extension ZombieType {
     /// zombie types, give each its own row here.
     func damageMultiplier(for type: DamageType) -> Double {
         switch self {
+        case .megaBoss:
+            switch type {
+            case .explosive, .fire, .electric: return 0.25
+            default: return 1.0
+            }
         case .normal:
             return 1.0
         case .runner:
