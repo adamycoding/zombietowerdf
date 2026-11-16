@@ -208,20 +208,27 @@ struct MapDefinition {
     static let gauntlet = MapDefinition(
         name: "Gauntlet",
         difficulty: .hard,
-        blurb: "Four sharp roads, one base in the middle. Good luck.",
+        blurb: "Four winding roads of different lengths all lead to the base in the middle.",
         lanes: [
-            pts([(0, 0.78), (0.25, 0.78), (0.25, 0.50), (0.50, 0.50)]),
-            pts([(1, 0.22), (0.75, 0.22), (0.75, 0.50), (0.50, 0.50)]),
-            pts([(0.70, 1), (0.70, 0.78), (0.50, 0.78), (0.50, 0.50)]),
-            pts([(0.30, 0), (0.30, 0.22), (0.50, 0.22), (0.50, 0.50)])
+            // Long snaking road from the top-left corner.
+            pts([(0, 0.92), (0.12, 0.74), (0.24, 0.90), (0.36, 0.74), (0.30, 0.60),
+                 (0.42, 0.54), (0.50, 0.50)]),
+            // Long snaking road from the bottom-right corner.
+            pts([(1, 0.08), (0.88, 0.26), (0.76, 0.10), (0.64, 0.26), (0.70, 0.40),
+                 (0.58, 0.44), (0.50, 0.50)]),
+            // Medium road from the left edge.
+            pts([(0, 0.30), (0.14, 0.40), (0.24, 0.24), (0.38, 0.34), (0.44, 0.44),
+                 (0.50, 0.50)]),
+            // Short road from the top-right.
+            pts([(0.85, 1), (0.78, 0.80), (0.66, 0.70), (0.58, 0.60), (0.50, 0.50)])
         ],
         area: 1,
-        trees: pts([(0.05, 0.30), (0.95, 0.70), (0.12, 0.95), (0.88, 0.05), (0.60, 0.50), (0.40, 0.50)]),
-        rocks: pts([(0.05, 0.55), (0.95, 0.45), (0.50, 0.95)]),
-        pond: CGPoint(x: 0.88, y: 0.02),
-        curvy: false,
+        trees: pts([(0.95, 0.55), (0.55, 0.95), (0.05, 0.05), (0.05, 0.55), (0.95, 0.85)]),
+        rocks: pts([(0.10, 0.20), (0.40, 0.95), (0.60, 0.05)]),
+        pond: CGPoint(x: 0.45, y: 0.04),
+        curvy: true,
         extraTrees: 8,
-        boulders: pts([(0.12, 0.42), (0.88, 0.58), (0.15, 0.10), (0.85, 0.92)]),
+        boulders: pts([(0.95, 0.70), (0.80, 0.55), (0.45, 0.20), (0.20, 0.55)]),
         theme: .volcano
     )
 

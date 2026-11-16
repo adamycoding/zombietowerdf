@@ -6,6 +6,12 @@
 	objectVersion = 110;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		E5E0220430AAAB600089E0A0 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = E5E0220330AAAB600089E0A0 /* FirebaseAuth */; };
+		E5E0220B30AAB0F30089E0A0 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = E5E0220A30AAB0F30089E0A0 /* GoogleSignIn */; };
+		E5E0220D30AAB0F30089E0A0 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = E5E0220C30AAB0F30089E0A0 /* GoogleSignInSwift */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		66D3E0F5306D5C9E00EBBF03 /* 2DGame.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = 2DGame.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -35,6 +41,9 @@
 		66D3E0F2306D5C9E00EBBF03 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
+				E5E0220D30AAB0F30089E0A0 /* GoogleSignInSwift in Frameworks */,
+				E5E0220430AAAB600089E0A0 /* FirebaseAuth in Frameworks */,
+				E5E0220B30AAB0F30089E0A0 /* GoogleSignIn in Frameworks */,
 			);
 		};
 /* End PBXFrameworksBuildPhase section */
@@ -73,6 +82,11 @@
 				66D3E0F7306D5C9E00EBBF03 /* 2DGame */,
 			);
 			name = 2DGame;
+			packageProductDependencies = (
+				E5E0220330AAAB600089E0A0 /* FirebaseAuth */,
+				E5E0220A30AAB0F30089E0A0 /* GoogleSignIn */,
+				E5E0220C30AAB0F30089E0A0 /* GoogleSignInSwift */,
+			);
 			productName = 2DGame;
 			productReference = 66D3E0F5306D5C9E00EBBF03 /* 2DGame.app */;
 			productType = "com.apple.product-type.application";
@@ -101,6 +115,10 @@
 			);
 			mainGroup = 66D3E0EC306D5C9E00EBBF03;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				E5E0220230AAAB600089E0A0 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+				E5E0220930AAB0F30089E0A0 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 66D3E0F6306D5C9E00EBBF03 /* Products */;
 			projectDirPath = "";
@@ -135,8 +153,10 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = 2DGame/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
 				INFOPLIST_KEY_UIStatusBarHidden = YES;
@@ -166,8 +186,10 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = 2DGame/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
 				INFOPLIST_KEY_UIStatusBarHidden = YES;
@@ -329,6 +351,43 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		E5E0220230AAAB600089E0A0 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 13.2.0;
+			};
+		};
+		E5E0220930AAB0F30089E0A0 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/google/GoogleSignIn-iOS";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 10.1.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		E5E0220330AAAB600089E0A0 /* FirebaseAuth */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E5E0220230AAAB600089E0A0 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAuth;
+		};
+		E5E0220A30AAB0F30089E0A0 /* GoogleSignIn */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E5E0220930AAB0F30089E0A0 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
+			productName = GoogleSignIn;
+		};
+		E5E0220C30AAB0F30089E0A0 /* GoogleSignInSwift */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E5E0220930AAB0F30089E0A0 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
+			productName = GoogleSignInSwift;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 66D3E0ED306D5C9E00EBBF03 /* Project object */;
 	validationLevel = 1;
