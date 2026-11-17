@@ -206,8 +206,13 @@ final class MainMenuScene: SKScene {
         button("Show hitboxes: \(DebugOverlay.showHitboxes ? "ON" : "OFF")", name: "hitboxes",
                center: CGPoint(x: size.width / 2, y: size.height * 0.25),
                size: CGSize(width: 300, height: 48), color: DebugOverlay.showHitboxes ? .systemGreen : .systemGray)
-        let account = AuthManager.shared.currentEmail ?? "Signed in"
-        button("Sign out (\(account))", name: "signout",
+        let accountText: String
+        if AuthManager.shared.isGuest {
+            accountText = "Playing as Guest - Sign in"
+        } else {
+            accountText = "Sign out (\(AuthManager.shared.currentEmail ?? "Signed in"))"
+        }
+        button(accountText, name: "signout",
                center: CGPoint(x: size.width / 2, y: size.height * 0.11),
                size: CGSize(width: 300, height: 40), color: .systemRed)
     }
