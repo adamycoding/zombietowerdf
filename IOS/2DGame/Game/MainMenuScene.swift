@@ -14,6 +14,9 @@ final class MainMenuScene: SKScene {
     /// Called with the map the player picked.
     var onPlayRequested: ((MapDefinition) -> Void)?
 
+    /// MH2D-32: called when the player taps Sign Out in Settings.
+    var onSignOutRequested: (() -> Void)?
+
     private enum Page { case main, maps, settings, howToPlay, credits }
     private var page: Page = .main
     private let content = SKNode()
@@ -203,12 +206,10 @@ final class MainMenuScene: SKScene {
         button("Show hitboxes: \(DebugOverlay.showHitboxes ? "ON" : "OFF")", name: "hitboxes",
                center: CGPoint(x: size.width / 2, y: size.height * 0.25),
                size: CGSize(width: 300, height: 48), color: DebugOverlay.showHitboxes ? .systemGreen : .systemGray)
-        let note = SKLabelNode(fontNamed: "AvenirNext-Regular")
-        note.text = "Hitboxes are for testing."
-        note.fontSize = 14
-        note.fontColor = .white
-        note.position = CGPoint(x: size.width / 2, y: size.height * 0.11)
-        content.addChild(note)
+        let account = AuthManager.shared.currentEmail ?? "Signed in"
+        button("Sign out (\(account))", name: "signout",
+               center: CGPoint(x: size.width / 2, y: size.height * 0.11),
+               size: CGSize(width: 300, height: 40), color: .systemRed)
     }
 
     private func buildInfo(title text: String, lines: [String]) {
@@ -256,6 +257,9 @@ final class MainMenuScene: SKScene {
         case "death": SoundManager.shared.deathSoundOn.toggle()
         case "music": SoundManager.shared.musicOn.toggle()
         case "hitboxes": DebugOverlay.showHitboxes.toggle()
+        case "signout":
+            page = .main
+            onSignOutRequested?()
         default:
             if name.hasPrefix("map"), let index = Int(name.dropFirst(3)), MapDefinition.all.indices.contains(index) {
                 onPlayRequested?(MapDefinition.all[index])

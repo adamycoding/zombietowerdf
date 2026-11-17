@@ -50,6 +50,24 @@ class GameViewController: UIViewController {
         )
     }
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        presentLoginIfNeeded()
+    }
+
+    /// MH2D-32: require sign-in. Firebase restores a saved session on launch,
+    /// so a returning player goes straight to the menu.
+    private func presentLoginIfNeeded() {
+        guard !AuthManager.shared.isSignedIn, presentedViewController == nil else { return }
+        let login = LoginViewController()
+        login.modalPresentationStyle = .fullScreen
+        login.onAuthenticated = { [weak self] in
+            self?.dismiss(animated: true)
+            if let skView = self?.view as? SKView { self?.showMainMenu(in: skView) }
+        }
+        present(login, animated: true)
+    }
+
     /// MH2D-22: the main menu. Play leads to map select, then into a game.
     private func showMainMenu(in skView: SKView) {
         gameScene = nil
@@ -58,6 +76,10 @@ class GameViewController: UIViewController {
         menu.onPlayRequested = { [weak self, weak skView] map in
             guard let skView else { return }
             self?.startNewGame(in: skView, map: map)
+        }
+        menu.onSignOutRequested = { [weak self] in
+            AuthManager.shared.signOut()
+            self?.presentLoginIfNeeded()
         }
         skView.presentScene(menu)
     }
