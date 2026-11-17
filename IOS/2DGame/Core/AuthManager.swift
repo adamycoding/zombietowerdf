@@ -18,18 +18,30 @@ final class AuthManager {
     static let shared = AuthManager()
     private init() {}
 
-    var isSignedIn: Bool { Auth.auth().currentUser != nil }
+    /// Guest mode: play without an account. Nothing is tied to a Firebase user.
+    private static let guestKey = "isGuest"
+    private(set) var isGuest: Bool {
+        get { UserDefaults.standard.bool(forKey: AuthManager.guestKey) }
+        set { UserDefaults.standard.set(newValue, forKey: AuthManager.guestKey) }
+    }
+
+    /// True for a Firebase account or for a guest.
+    var isSignedIn: Bool { Auth.auth().currentUser != nil || isGuest }
     var currentEmail: String? { Auth.auth().currentUser?.email }
 
+    func continueAsGuest() {
+        isGuest = true
+    }
+
     func register(email: String, password: String, completion: @escaping (String?) -> Void) {
-        Auth.auth().createUser(withEmail: email, password: password) { _, error in
-            DispatchQueue.main.async { completion(error.map(AuthManager.message(for:))) }
+        Auth.auth().createUser(withEmail: email, password: password) { [self] _, error in
+            DispatchQueue.main.async { if error == nil { self.isGuest = false }; completion(error.map(AuthManager.message(for:))) }
         }
     }
 
     func signIn(email: String, password: String, completion: @escaping (String?) -> Void) {
-        Auth.auth().signIn(withEmail: email, password: password) { _, error in
-            DispatchQueue.main.async { completion(error.map(AuthManager.message(for:))) }
+        Auth.auth().signIn(withEmail: email, password: password) { [self] _, error in
+            DispatchQueue.main.async { if error == nil { self.isGuest = false }; completion(error.map(AuthManager.message(for:))) }
         }
     }
 
@@ -55,12 +67,13 @@ final class AuthManager {
             let credential = GoogleAuthProvider.credential(withIDToken: idToken,
                                                            accessToken: user.accessToken.tokenString)
             Auth.auth().signIn(with: credential) { _, error in
-                DispatchQueue.main.async { completion(error.map(AuthManager.message(for:))) }
+                DispatchQueue.main.async { if error == nil { self.isGuest = false }; completion(error.map(AuthManager.message(for:))) }
             }
         }
     }
 
     func signOut() {
+        isGuest = false
         GIDSignIn.sharedInstance.signOut()
         try? Auth.auth().signOut()
     }

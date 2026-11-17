@@ -20,6 +20,7 @@ final class LoginViewController: UIViewController {
     private let signInButton = UIButton(type: .system)
     private let registerButton = UIButton(type: .system)
     private let googleButton = UIButton(type: .system)
+    private let guestButton = UIButton(type: .system)
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -51,6 +52,10 @@ final class LoginViewController: UIViewController {
         style(googleButton, title: "Sign in with Google", color: .white)
         googleButton.setTitleColor(.black, for: .normal)
         googleButton.addTarget(self, action: #selector(googleTapped), for: .touchUpInside)
+        guestButton.setTitle("Continue as Guest", for: .normal)
+        guestButton.setTitleColor(.white, for: .normal)
+        guestButton.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
+        guestButton.addTarget(self, action: #selector(guestTapped), for: .touchUpInside)
         signInButton.addTarget(self, action: #selector(signInTapped), for: .touchUpInside)
         registerButton.addTarget(self, action: #selector(registerTapped), for: .touchUpInside)
 
@@ -64,7 +69,7 @@ final class LoginViewController: UIViewController {
         buttons.spacing = 12
         buttons.distribution = .fillEqually
 
-        let stack = UIStackView(arrangedSubviews: [title, subtitle, emailField, passwordField, buttons, googleButton, messageLabel])
+        let stack = UIStackView(arrangedSubviews: [title, subtitle, emailField, passwordField, buttons, googleButton, guestButton, messageLabel])
         stack.axis = .vertical
         stack.spacing = 10
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -107,6 +112,7 @@ final class LoginViewController: UIViewController {
         signInButton.isEnabled = !busy
         registerButton.isEnabled = !busy
         googleButton.isEnabled = !busy
+        guestButton.isEnabled = !busy
         view.alpha = busy ? 0.8 : 1
     }
 
@@ -133,6 +139,12 @@ final class LoginViewController: UIViewController {
         view.endEditing(true)
         setBusy(true)
         AuthManager.shared.signIn(email: email, password: password) { [weak self] in self?.finish($0) }
+    }
+
+    @objc private func guestTapped() {
+        view.endEditing(true)
+        AuthManager.shared.continueAsGuest()
+        onAuthenticated?()
     }
 
     @objc private func googleTapped() {
